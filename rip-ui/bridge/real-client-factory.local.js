@@ -163,7 +163,8 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const backend = String(env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
   const sshHost = String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || '192.168.100.200').trim();
   const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || 'root').trim();
-  const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || '').trim();
+  const defaultUserKey = env.USERPROFILE ? `${env.USERPROFILE}\\.ssh\\id_ed25519` : '';
+  const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || defaultUserKey).trim();
   const sshPort = Number(env.MEMJET_SSH_PORT || env.RIP_SSH_PORT || 22);
   const sshBin = String(env.MEMJET_SSH_BIN || 'ssh').trim();
   const sshTimeoutMs = Number(env.MEMJET_SSH_TIMEOUT_MS || 30000);
@@ -224,8 +225,9 @@ async function runSshOperation({ settings, operation, payload, logger }) {
   }
 
   const sshArgs = [
+    '-o', 'BatchMode=yes',
     '-o', 'StrictHostKeyChecking=accept-new',
-    '-o', 'PreferredAuthentications=publickey,password,keyboard-interactive',
+    '-o', 'PreferredAuthentications=publickey',
     '-p', String(settings.sshPort),
     ...(settings.sshKeyPath ? ['-i', settings.sshKeyPath] : []),
     `${settings.sshUser}@${settings.sshHost}`,
