@@ -395,7 +395,7 @@ class BridgeHttpAdapter {
       if (error instanceof RipBackendError) throw error;
       throw new RipBackendError('BRIDGE_UNAVAILABLE', `HTTP bridge unavailable for ${endpoint}: ${error.message}`, {
         endpoint,
-        remediation: `Start the configured backend and verify ${resolvedBaseUrl}/api/health (bridge) or ${resolvedBaseUrl}/health (adapter) responds.`
+        remediation: `Start the bridge backend and verify ${resolvedBaseUrl}/api/health responds.`
       });
     } finally {
       clearTimeout(timer);
@@ -511,52 +511,8 @@ class BridgeHttpAdapter {
         timestamp: nowIso()
       };
     } catch (bridgeError) {
-      const bridgeResponseError = String(
-        bridgeError?.details?.bridgeResponse?.error
-        || bridgeError?.details?.bridgeResponse?.code
-        || ''
-      ).trim().toLowerCase();
-
-      // If bridge is reachable and returned a concrete adapter/gate error,
-      // propagate it directly (do not mask with adapter fallback noise).
-      if (bridgeResponseError === 'adapter_unavailable' || bridgeResponseError === 'simulated_response_rejected') {
-        throw bridgeError;
-      }
-
-      // Fallback: direct RIP adapter queueing path (legacy behavior).
-      const args = Array.isArray(payload?.args) ? payload.args.filter(arg => typeof arg === 'string' && arg.trim()) : [];
-      const env = payload?.env && typeof payload.env === 'object' ? payload.env : {};
-
-      const created = await this.request('POST', '/jobs', {
-        input_path: inputPath,
-        args,
-        env
-      }, { baseUrl: this.getAdapterBaseUrl() });
-
-      const jobId = firstDefinedString(created?.id, created?.jobId, payload?.jobId);
-      let status = firstDefinedString(created?.status, 'queued');
-
-      if (jobId) {
-        try {
-          const latest = await this.request('GET', `/jobs/${jobId}`, undefined, { baseUrl: this.getAdapterBaseUrl() });
-          status = firstDefinedString(latest?.status, status);
-        } catch {
-          // Non-fatal: job was accepted already.
-        }
-      }
-
-      this.logger?.warn?.('[rip-backend] submitJob bridge pipeline unavailable; falling back to adapter /jobs path.', {
-        bridgeError: bridgeError?.message || String(bridgeError),
-        inputPath
-      });
-
-      return {
-        accepted: true,
-        status,
-        message: null,
-        jobId: jobId || null,
-        timestamp: nowIso()
-      };
+      // Bridge-only submit path: propagate bridge failure directly.
+      throw bridgeError;
     }
   }
 }
