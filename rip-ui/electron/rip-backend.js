@@ -511,6 +511,18 @@ class BridgeHttpAdapter {
         timestamp: nowIso()
       };
     } catch (bridgeError) {
+      const bridgeResponseError = String(
+        bridgeError?.details?.bridgeResponse?.error
+        || bridgeError?.details?.bridgeResponse?.code
+        || ''
+      ).trim().toLowerCase();
+
+      // If bridge is reachable and returned a concrete adapter/gate error,
+      // propagate it directly (do not mask with adapter fallback noise).
+      if (bridgeResponseError === 'adapter_unavailable' || bridgeResponseError === 'simulated_response_rejected') {
+        throw bridgeError;
+      }
+
       // Fallback: direct RIP adapter queueing path (legacy behavior).
       const args = Array.isArray(payload?.args) ? payload.args.filter(arg => typeof arg === 'string' && arg.trim()) : [];
       const env = payload?.env && typeof payload.env === 'object' ? payload.env : {};

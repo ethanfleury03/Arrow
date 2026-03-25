@@ -205,6 +205,53 @@ async function run() {
     assert.equal(result.status, 'completed');
   });
 
+  await withServer((req, res) => {
+    if (req.method === 'POST' && req.url === '/api/jobs/ingest') {
+      res.writeHead(201, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ jobId: 'JOB_BRIDGE_FAIL_001', state: 'validated' }));
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/api/jobs/JOB_BRIDGE_FAIL_001/send') {
+      res.writeHead(503, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'adapter_unavailable',
+        message: 'Real Memjet adapter unavailable.'
+      }));
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/jobs') {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unexpected_fallback_call' }));
+      return;
+    }
+
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not_found' }));
+  }, async port => {
+    const backend = createRipBackend({
+      mode: 'bridge-http',
+      runtimeConfig: {
+        bridgeHost: '127.0.0.1',
+        bridgePort: port,
+        adapterHost: '127.0.0.1',
+        adapterPort: port
+      },
+      logger: { warn() {}, error() {} }
+    });
+
+    await assert.rejects(
+      () => backend.submitJob({
+        jobId: 'LOCAL_JOB_FAIL_123',
+        inputPath: '/tmp/mock-job.pdf',
+        config: { host: '127.0.0.1', commandPort: 13002 },
+        settings: { inputPath: '/tmp/mock-job.pdf' }
+      }),
+      error => error.code === 'BRIDGE_UNAVAILABLE' && /\/api\/jobs\/JOB_BRIDGE_FAIL_001\/send/i.test(error.message)
+    );
+  });
+
   const unavailable = createRipBackend({
     mode: 'bridge-http',
     runtimeConfig: { bridgeHost: '127.0.0.1', bridgePort: 1 },
