@@ -1,0 +1,44 @@
+[
+  {
+    "id": "happy-path",
+    "outcome": {
+      "result": "PASS",
+      "faultCode": null
+    }
+  },
+  {
+    "id": "prepare-with-empty-queue",
+    "outcome": {
+      "result": "FAIL",
+      "faultCode": "ERR_NO_JOB_AT_QUEUE_HEAD"
+    }
+  },
+  {
+    "id": "start-before-prepare",
+    "outcome": {
+      "result": "FAIL",
+      "faultCode": "ERR_NOT_READY"
+    }
+  },
+  {
+    "id": "double-start-busy",
+    "outcome": {
+      "result": "FAIL",
+      "faultCode": "ERR_BUSY"
+    }
+  },
+  {
+    "id": "fault-then-recover",
+    "outcome": {
+      "result": "PASS",
+      "faultCode": null
+    }
+  },
+  {
+    "id": "init-when-not-off",
+    "outcome": {
+      "result": "FAIL",
+      "faultCode": "ERR_ENGINE_MUST_BE_OFF"
+    }
+  }
+]

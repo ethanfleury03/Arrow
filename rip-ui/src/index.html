@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RIP UI Prototype</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand-block" aria-label="Arrow Systems brand area">
+        <div class="brand-mark" aria-hidden="true">
+          <span class="brand-mark-arrow"></span>
+          <span class="brand-mark-text">ARROW SYSTEMS</span>
+        </div>
+        <div class="title-stack">
+          <p class="eyebrow">INDUSTRIAL PRINT OPERATIONS</p>
+          <h1>Arrow Systems RIP Operator Console</h1>
+          <div class="important-controls" role="group" aria-label="Important controls">
+            <button id="btnLink1Gb" class="link-indicator" type="button" aria-pressed="false" aria-label="1 gigabit ethernet link offline" title="1Gb Ethernet link">
+              <span class="wifi-outline wifi-outline-1gb" aria-hidden="true"><span></span><span></span><span></span></span>
+              <span class="link-label">1Gb</span>
+            </button>
+            <button id="btnLink10Gb" class="link-indicator link-indicator-10gb" type="button" aria-pressed="false" aria-label="10 gigabit ethernet link offline" title="10Gb Ethernet link">
+              <span class="wifi-outline wifi-outline-10gb" aria-hidden="true"><span></span><span></span><span></span></span>
+              <span class="link-label">10Gb</span>
+            </button>
+            <button id="btnAutoSendToggle" class="auto-send-toggle" type="button" aria-pressed="false" aria-label="Auto-send paused" title="Toggle printer auto-send mode">
+              <span class="auto-send-icon" id="autoSendIcon" aria-hidden="true">⏸</span>
+              <span class="auto-send-text" id="autoSendText">Auto-send Off</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="header-controls">
+        <div id="globalConnectivity" class="global-connectivity" role="status" aria-live="polite" aria-label="Global connectivity status: offline">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="globalConnectivityText">Offline</span>
+        </div>
+        <div class="top-tabs" role="tablist" aria-label="Primary operator sections" id="topTabs">
+          <button id="tabPrintheadControls" role="tab" aria-controls="panelPrintheadControls" aria-selected="true" tabindex="0" data-tab="printhead" class="top-tab-btn">Printhead Controls</button>
+          <button id="tabJobSubmission" role="tab" aria-controls="panelJobSubmission" aria-selected="false" tabindex="-1" data-tab="jobs" class="top-tab-btn">Job Submission</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace-shell" aria-label="Operator one-page workspace">
+      <section id="panelPrintheadControls" role="tabpanel" aria-labelledby="tabPrintheadControls" class="top-tab-panel">
+        <div class="layout layout-printhead" aria-label="Printhead controls workspace">
+          <div class="printhead-main-column" aria-label="Printhead queue and controls">
+            <section class="workflow-section control-card printhead-queue-card" aria-label="Queued jobs table">
+              <h3>Queued Jobs</h3>
+              <div class="jobs-table-wrap" role="region" aria-label="Jobs list" tabindex="0">
+                <table class="jobs-table" aria-label="Queued jobs">
+                  <thead>
+                    <tr>
+                      <th scope="col">Job</th>
+                      <th scope="col">Size</th>
+                      <th scope="col">Mode</th>
+                      <th scope="col">Count</th>
+                      <th scope="col">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="jobTable"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <div class="printhead-lower-split" aria-label="Printhead controls and logs">
+              <section id="panelQueue" class="tab-panel panel printhead-controls-panel" aria-label="Printhead controls panel">
+                <h2>Printhead Controls</h2>
+
+                <section class="workflow-section control-card" aria-label="Print head cleaning controls">
+                  <h3>Print Head Cleaning</h3>
+                  <div class="btn-grid cols-3" id="controlsCleaning"></div>
+                </section>
+
+                <section class="workflow-section control-card" aria-label="Priming controls">
+                  <h3>Priming</h3>
+                  <div class="btn-grid cols-2" id="controlsPriming"></div>
+                </section>
+
+                <section class="workflow-section bottom-controls-layout" aria-label="Engine, head, and print control commands">
+                  <section class="control-card bottom-control-card" aria-label="Engine controls">
+                    <h3>Engine</h3>
+                    <div class="btn-grid cols-1" id="controlsEngine"></div>
+                  </section>
+
+                  <section class="control-card bottom-control-card" aria-label="Head controls">
+                    <h3>Head</h3>
+                    <div class="btn-grid cols-1" id="controlsHead"></div>
+                  </section>
+
+                  <section class="control-card bottom-control-card" aria-label="Print control commands">
+                    <h3>Print Control</h3>
+                    <div class="btn-grid cols-1" id="controlsPrint"></div>
+                    <ul id="queue"></ul>
+                  </section>
+                </section>
+              </section>
+
+              <section class="tab-panel panel printhead-logs-panel" aria-label="Logs panel">
+                <h2>Logs</h2>
+
+                <details class="log-details" open>
+                  <summary>Verbose Readouts</summary>
+                  <h3>Config (Local)</h3>
+                  <pre id="configPreview"></pre>
+                  <h3>Pipeline Simulator</h3>
+                  <pre id="pipelinePreview"></pre>
+                  <div hidden aria-hidden="true">
+                    <h3>Preflight Gate</h3>
+                    <pre id="preflightPreview"></pre>
+                    <h3>Data-plane Submission</h3>
+                    <pre id="submissionPreview"></pre>
+                  </div>
+                </details>
+
+                <details class="log-details" open>
+                  <summary>Event Log</summary>
+                  <pre id="logs"></pre>
+                </details>
+              </section>
+            </div>
+          </div>
+
+          <aside class="panel panel-right panel-right-live printhead-live-panel" aria-label="Live status sidebar">
+            <section id="panelLive" class="tab-panel">
+              <h2>Live Status</h2>
+
+              <section class="control-card status-card system-state-card" aria-label="System state">
+                <div class="system-state-row">
+                  <span class="system-state-label">System State</span>
+                  <strong id="systemStateValue" class="system-state-value">PRIMED_IDLE</strong>
+                </div>
+              </section>
+
+              <div class="live-summary">
+                <span id="simulationBadge" class="badge">SIMULATED BACKEND</span>
+              </div>
+
+              <section class="control-card status-card ink-values-card" aria-label="Ink Values">
+                <h3>Ink Values</h3>
+                <div class="ink-values-list" role="list" aria-label="Current CMYK ink percentages">
+                  <div class="ink-value-row" role="listitem">
+                    <div class="ink-value-meta">
+                      <span class="ink-label">Ink C</span>
+                      <span class="ink-percent" aria-label="Ink C 51 percent">51%</span>
+                    </div>
+                    <div class="ink-bar" role="img" aria-label="Ink C level 51 percent">
+                      <span class="ink-bar-fill ink-c" style="width: 51%"></span>
+                    </div>
+                  </div>
+                  <div class="ink-value-row" role="listitem">
+                    <div class="ink-value-meta">
+                      <span class="ink-label">Ink M</span>
+                      <span class="ink-percent" aria-label="Ink M 84 percent">84%</span>
+                    </div>
+                    <div class="ink-bar" role="img" aria-label="Ink M level 84 percent">
+                      <span class="ink-bar-fill ink-m" style="width: 84%"></span>
+                    </div>
+                  </div>
+                  <div class="ink-value-row" role="listitem">
+                    <div class="ink-value-meta">
+                      <span class="ink-label">Ink Y</span>
+                      <span class="ink-percent" aria-label="Ink Y 86 percent">86%</span>
+                    </div>
+                    <div class="ink-bar" role="img" aria-label="Ink Y level 86 percent">
+                      <span class="ink-bar-fill ink-y" style="width: 86%"></span>
+                    </div>
+                  </div>
+                  <div class="ink-value-row" role="listitem">
+                    <div class="ink-value-meta">
+                      <span class="ink-label">Ink K</span>
+                      <span class="ink-percent" aria-label="Ink K 73 percent">73%</span>
+                    </div>
+                    <div class="ink-bar" role="img" aria-label="Ink K level 73 percent">
+                      <span class="ink-bar-fill ink-k" style="width: 73%"></span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <section id="panelJobSubmission" role="tabpanel" aria-labelledby="tabJobSubmission" class="top-tab-panel" hidden>
+        <div class="layout layout-job-submission" aria-label="Job submission workspace">
+          <section class="column column-left" aria-label="Artwork intake and submission controls">
+            <aside class="panel panel-left" aria-label="Artwork intake controls">
+              <section id="panelArtworkIntake" class="tab-panel">
+                <h2>Artwork Intake</h2>
+                <div id="dropZone" class="drop-zone">
+                  <p><strong>Drop PDF here</strong> or choose a file</p>
+                  <input id="pdfInput" type="file" accept="application/pdf,.pdf,image/*" />
+                </div>
+                <div class="meta-grid">
+                  <div><span>Loaded File</span><strong id="loadedFileName">None</strong></div>
+                  <div><span>PDF Page Size</span><strong id="pdfPageSize">—</strong></div>
+                </div>
+
+                <section class="job-settings-card" aria-label="Job Settings">
+                  <h3>Job Settings</h3>
+                  <table class="job-settings-table" aria-label="Job Settings table">
+                    <tbody>
+                      <tr><th scope="row">Device</th><td id="jobSettingDevice">DuraFlex</td></tr>
+                      <tr><th scope="row">Layout Size</th><td id="jobSettingLayoutSize">—</td></tr>
+                      <tr><th scope="row">Job File</th><td id="jobSettingJobFile">—</td></tr>
+                      <tr><th scope="row">ICC Profile</th><td id="jobSettingIccProfile">—</td></tr>
+                      <tr><th scope="row">Calibration</th><td id="jobSettingCalibration">—</td></tr>
+                      <tr><th scope="row">Spot Color</th><td id="jobSettingSpotColor">—</td></tr>
+                      <tr><th scope="row">VDP</th><td id="jobSettingVdp">—</td></tr>
+                      <tr><th scope="row">Reg Mark</th><td id="jobSettingRegMark">—</td></tr>
+                    </tbody>
+                  </table>
+                </section>
+
+              </section>
+            </aside>
+          </section>
+
+          <section class="column column-center" aria-label="Sheet preview emphasis">
+            <section class="panel panel-preview">
+              <div class="panel-preview-header">
+                <h2>Sheet Layout Preview</h2>
+                <div class="panel-preview-actions" role="group" aria-label="Sheet layout actions">
+                  <button
+                    id="btnOpen3dPreview"
+                    class="preview-clear-btn"
+                    type="button"
+                    aria-label="Open 3D Preview"
+                    title="Open 3D Preview"
+                  >
+                    <svg class="preview-icon-cube" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M12 3.2 4 7.2v9.6l8 4 8-4V7.2l-8-4Zm0 1.9 5.8 2.9L12 10.9 6.2 8 12 5.1Zm-6.3 4.1 5.3 2.7v6.7l-5.3-2.7V9.2Zm12.6 0v6.6l-5.3 2.7v-6.7l5.3-2.6Z" fill="currentColor"/>
+                    </svg>
+                  </button>
+                  <button
+                    id="btnOpenSendJobModal"
+                    class="preview-send-btn"
+                    type="button"
+                    aria-label="Send job"
+                    title="Send job"
+                  >
+                    <span class="preview-send-icon" aria-hidden="true">➤</span>
+                    <span class="preview-send-text">Send</span>
+                  </button>
+                  <button
+                    id="btnClearLayoutPreview"
+                    class="preview-clear-btn"
+                    type="button"
+                    aria-label="Clear preview"
+                    title="Clear preview"
+                  >
+                    🗑️
+                  </button>
+                </div>
+              </div>
+              <canvas id="layoutRulerCanvas" width="920" height="56" aria-label="Top horizontal ruler showing media width in inches"></canvas>
+              <canvas id="layoutCanvas" width="920" height="520" aria-label="Media sheet and artwork placement preview"></canvas>
+              <div class="hint">Full sheet grid baseline · Hatched lower area = non-print/cutoff · Red highlight = placed artwork · Ruler unit: in</div>
+            </section>
+          </section>
+
+          <aside class="panel panel-right job-arrange-panel" aria-label="Arrange controls">
+            <section id="panelArrange" class="tab-panel">
+              <section class="workflow-section control-card" aria-label="Alignment controls">
+                <h3>Alignment</h3>
+                <div class="arrange-align-grid" role="group" aria-label="Horizontal and vertical alignment presets">
+                  <button id="btnAlignLeft" class="arrange-icon-btn" type="button" aria-label="Align Left" title="Align Left">↤</button>
+                  <button id="btnAlignCenter" class="arrange-icon-btn" type="button" aria-label="Align Center" title="Align Center">↔</button>
+                  <button id="btnAlignRight" class="arrange-icon-btn" type="button" aria-label="Align Right" title="Align Right">↦</button>
+                  <button id="btnAlignTop" class="arrange-icon-btn" type="button" aria-label="Align Top" title="Align Top">↥</button>
+                  <button id="btnAlignMiddle" class="arrange-icon-btn" type="button" aria-label="Align Middle" title="Align Middle">↕</button>
+                  <button id="btnAlignBottom" class="arrange-icon-btn" type="button" aria-label="Align Bottom" title="Align Bottom">↧</button>
+                </div>
+              </section>
+
+              <section class="workflow-section control-card" aria-label="Arrange sizing and transform controls">
+                <h3>Arrange</h3>
+
+                <section class="arrange-category-card" aria-label="Size controls">
+                  <h4>Size</h4>
+                  <div class="control-grid compact-grid">
+                    <label for="pageSizePreset">Page Size
+                      <select id="pageSizePreset" aria-label="Page size preset">
+                        <option value="letter">Letter (8.5 × 11 in)</option>
+                        <option value="legal">Legal (8.5 × 14 in)</option>
+                        <option value="tabloid">Tabloid (11 × 17 in)</option>
+                        <option value="a4">A4</option>
+                        <option value="a3">A3</option>
+                        <option value="12x18">12 × 18 in</option>
+                        <option value="13x19">13 × 19 in</option>
+                        <option value="custom">Custom</option>
+                      </select>
+                    </label>
+                    <label for="pageOrientation">Orientation
+                      <select id="pageOrientation" aria-label="Page orientation">
+                        <option value="portrait">Portrait</option>
+                        <option value="landscape">Landscape</option>
+                      </select>
+                    </label>
+                    <label>Media Width
+                      <div class="field-with-unit"><input id="mediaWidth" type="number" min="1.97" max="78.74" step="0.01" /><span>in</span></div>
+                    </label>
+                    <label>Media Height
+                      <div class="field-with-unit"><input id="mediaHeight" type="number" min="1.97" max="78.74" step="0.01" /><span>in</span></div>
+                    </label>
+                    <label>X Position
+                      <div class="field-with-unit"><input id="offsetX" type="number" min="-39.37" max="39.37" step="0.01" /><span>in</span></div>
+                    </label>
+                    <label>Y Position
+                      <div class="field-with-unit"><input id="offsetY" type="number" min="-39.37" max="39.37" step="0.01" /><span>in</span></div>
+                    </label>
+                  </div>
+                </section>
+
+                <section class="arrange-category-card" aria-label="Gap controls">
+                  <h4>Gap</h4>
+                  <div class="control-grid compact-grid">
+                    <label>Gap Horizontal
+                      <div class="field-with-unit"><input id="gapHorizontal" type="number" min="0" max="196.85" step="0.01" /><span>in</span></div>
+                    </label>
+                    <label>Gap Vertical
+                      <div class="field-with-unit"><input id="gapVertical" type="number" min="0" max="196.85" step="0.01" /><span>in</span></div>
+                    </label>
+                  </div>
+                </section>
+
+                <section class="arrange-category-card" aria-label="Rotation controls">
+                  <h4>Rotation</h4>
+                  <div class="rotation-controls" role="group" aria-label="Rotation and flip controls">
+                    <label class="rotation-angle-label" for="rotationDeg"><span class="rotation-angle-label-text">Angle</span>
+                      <input id="rotationDeg" class="rotation-angle-input" type="number" min="-180" max="180" step="1" />
+                    </label>
+                    <button id="btnRotate90" class="arrange-icon-btn rotation-action-btn" type="button" aria-label="Rotate +90°" title="Rotate +90°">↻</button>
+                    <button id="btnFlipHorizontal" class="arrange-icon-btn rotation-action-btn" type="button" aria-label="Horizontal flip" title="Horizontal flip">⇋</button>
+                    <button id="btnFlipVertical" class="arrange-icon-btn rotation-action-btn" type="button" aria-label="Vertical flip" title="Vertical flip">⇵</button>
+                  </div>
+                </section>
+
+                <section class="arrange-category-card" aria-label="Copy pattern controls">
+                  <h4>Copy Pattern</h4>
+                  <div class="control-grid compact-grid">
+                    <label>Horizontal Count<input id="copyHorizontalCount" type="number" min="1" max="200" step="1" /></label>
+                    <label>Vertical Count<input id="copyVerticalCount" type="number" min="1" max="200" step="1" /></label>
+                    <label>Horizontal Spacing
+                      <div class="field-with-unit"><input id="copyHorizontalSpacing" type="number" min="0" max="196.85" step="0.01" /><span>in</span></div>
+                    </label>
+                    <label>Vertical Spacing
+                      <div class="field-with-unit"><input id="copyVerticalSpacing" type="number" min="0" max="196.85" step="0.01" /><span>in</span></div>
+                    </label>
+                  </div>
+                  <label class="checkbox-row" for="copyIntervalIncludesSize">
+                    <input id="copyIntervalIncludesSize" type="checkbox" />
+                    <span>interval including image size</span>
+                  </label>
+                </section>
+              </section>
+
+            </section>
+
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="sendJobDialog" class="send-job-dialog" aria-labelledby="sendJobDialogTitle">
+      <form id="sendJobForm" method="dialog" class="send-job-form">
+        <h2 id="sendJobDialogTitle">Send Job</h2>
+        <label for="sendJobCopiesInput">Amount of copies</label>
+        <input id="sendJobCopiesInput" type="number" min="1" step="1" value="1" inputmode="numeric" required />
+        <div class="send-job-dialog-actions">
+          <button id="btnConfirmSendJob" class="btn-active" value="send">Send</button>
+          <button id="btnCancelSendJob" type="button" value="cancel">Cancel</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="modeling3dDialog" class="send-job-dialog" aria-labelledby="modeling3dDialogTitle">
+      <form method="dialog" class="send-job-form modeling-3d-form">
+        <div class="modeling-3d-header">
+          <h2 id="modeling3dDialogTitle">3D Modeling</h2>
+          <button id="btnClose3dModelingX" type="button" class="preview-clear-btn modeling-3d-close" aria-label="Close 3D Modeling" title="Close">✕</button>
+        </div>
+        <div id="modeling3dBody" class="modeling-3d-body" aria-label="3D Modeling workspace placeholder">
+          <div class="modeling-3d-actions" role="group" aria-label="3D modeling actions">
+            <button id="btn3dNewDesign" type="button" class="modeling-3d-action-btn">New Design</button>
+            <button id="btn3dSavedDesigns" type="button" class="modeling-3d-action-btn">Saved Designs</button>
+          </div>
+        </div>
+        <div class="send-job-dialog-actions">
+          <button id="btnClose3dModeling" type="button" value="cancel">Close</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="./vendor/pdf.min.js"></script>
+    <script src="./vendor/three.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

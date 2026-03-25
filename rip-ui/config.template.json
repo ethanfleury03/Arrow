@@ -1,0 +1,23 @@
+{
+  "app": {
+    "name": "RIP UI Prototype",
+    "mode": "offline-mock",
+    "readOnlyDiscovery": true,
+    "deterministicSeed": 42
+  },
+  "rip": {
+    "host": "192.168.111.2",
+    "jobDataPort": 13001,
+    "commandPort": 13002,
+    "eventPort": 9231,
+    "protocol": "thrift-compact-framed"
+  },
+  "defaults": {
+    "intendedSpeedIps": 120,
+    "queuePollIntervalMs": 1000,
+    "maxLogEntries": 500,
+    "operatorUsername": "operator-name",
+    "operatorBadgeId": "badge-001",
+    "operatorIdentitySecret": "change-me-before-live"
+  }
+}

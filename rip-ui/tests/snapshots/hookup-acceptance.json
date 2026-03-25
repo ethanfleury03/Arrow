@@ -1,0 +1,15 @@
+{
+  "source": "live",
+  "running": true,
+  "engineState": "READY",
+  "queueLength": 2,
+  "connectionTests": {
+    "command": "OK 2026-03-13T14:00:00.000Z",
+    "event": "OK 2026-03-13T14:00:00.000Z",
+    "data": "OK 2026-03-13T14:00:00.000Z"
+  },
+  "sequenceStep": "0/6",
+  "pipeline": "WAITING",
+  "commandError": "Command rejected by backend.",
+  "historyHead": []
+}

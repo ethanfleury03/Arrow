@@ -1,0 +1,46 @@
+name: rip-ui-prototype-ci
+
+on:
+  push:
+    paths:
+      - 'rip-ui-prototype/**'
+  pull_request:
+    paths:
+      - 'rip-ui-prototype/**'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rip-ui-prototype
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install
+        run: npm install
+
+      - name: Deterministic lint
+        run: npm run lint
+
+      - name: UI harness snapshots
+        run: npm run test:harness
+
+      - name: Smoke app load
+        run: npm run smoke
+
+      - name: Deterministic preflight
+        run: npm run preflight
+
+      - name: Scenario matrix
+        run: npm run test:scenarios
+
+      - name: Scenario report artifact generation
+        run: npm run report:scenarios

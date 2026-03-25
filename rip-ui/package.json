@@ -1,0 +1,89 @@
+{
+  "name": "rip-ui-prototype",
+  "version": "0.10.14",
+  "description": "Offline-first Windows desktop prototype for RIP + PES/Thrift control simulation",
+  "main": "electron/main.js",
+  "private": true,
+  "author": "Arrow Systems - Ethan Sprint",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win nsis --x64",
+    "dist:placeholder": "pwsh ./scripts/build-windows-placeholder.ps1",
+    "verify:artifact": "pwsh ./scripts/verify-dist.ps1",
+    "test:harness": "node tests/ui-harness.test.js",
+    "lint": "node scripts/lint.js",
+    "smoke": "node scripts/smoke.js",
+    "preflight": "node scripts/preflight.js",
+    "test:scenarios": "node tests/scenario-matrix.test.js",
+    "report:scenarios": "node scripts/scenario-report.js",
+    "release:manifest": "node scripts/release-manifest.js",
+    "report:control": "node scripts/control-runbook.js",
+    "handoff:bundle": "node scripts/handoff-bundle.js",
+    "test:handoff": "node tests/handoff-bundle.test.js",
+    "report:drill": "node scripts/drill-card.js",
+    "test:drill": "node tests/drill-card.test.js",
+    "test:bridge": "node tests/bridge-contract.test.js",
+    "test:bridge:v1": "node tests/bridge-v1.test.js",
+    "test:bridge:phase1": "node tests/bridge-phase1.test.js",
+    "test:head-controls": "node tests/head-controls-bridge.test.js",
+    "bridge:start": "node bridge/server.js",
+    "test:backend": "node tests/rip-backend.test.js",
+    "test:real-client-selection": "node tests/real-client-selection.test.js",
+    "test:runtime-config": "node tests/runtime-config.test.js",
+    "test:hookup": "node tests/hookup-harness.test.js",
+    "report:hookup": "node scripts/hookup-report.js",
+    "report:ops": "node scripts/ops-snapshot.js",
+    "test:ops": "node tests/ops-snapshot.test.js",
+    "test:submitter": "node tests/data-submitter-contract.test.js",
+    "test:submitter:prod": "node tests/production-data-submitter.test.js",
+    "report:submitter": "node scripts/submitter-report.js",
+    "test:submitter:report": "node tests/submitter-report.test.js",
+    "test:completion": "node tests/completion-guard.test.js",
+    "guard:completion": "node scripts/completion-guard.js",
+    "test:config": "node tests/config-audit.test.js",
+    "report:config": "node scripts/config-audit.js",
+    "ci": "npm run lint && npm run test:harness && npm run smoke && npm run preflight && npm run test:scenarios && npm run report:scenarios && npm run release:manifest && npm run report:control && npm run handoff:bundle && npm run test:handoff && npm run test:drill && npm run test:bridge && npm run test:bridge:v1 && npm run test:bridge:phase1 && npm run test:backend && npm run test:runtime-config && npm run test:hookup && npm run test:submitter && npm run test:submitter:prod && npm run test:submitter:report && npm run test:completion && npm run test:config && npm run report:submitter && npm run report:hookup && npm run test:ops && npm run report:ops && npm run report:config && npm run guard:completion"
+  },
+  "build": {
+    "appId": "com.arrow.ripuiprototype",
+    "productName": "RIP UI Prototype",
+    "asar": true,
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "config.template.json",
+      "README.md",
+      "HOOKUP_CHECKLIST.md"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "RIP-UI-Prototype-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "three": "^0.152.2",
+    "thrift": "^0.22.0"
+  }
+}

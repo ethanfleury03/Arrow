@@ -1,0 +1,9 @@
+{
+  "lastResult": "PASS: deterministic simulation complete",
+  "sequenceStep": "6/6",
+  "pipeline": "VALIDATED",
+  "jobStatuses": [
+    "done",
+    "done"
+  ]
+}

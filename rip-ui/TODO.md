@@ -1,0 +1,94 @@
+# TODO
+
+## Milestones
+
+- [x] M1–M24 complete (see changelog history).
+- [x] M25: Phase 4 live hookup foundations
+  - operator profile/runtime config loader for Electron
+  - hardened thrift-cli wiring validation + actionable setup errors
+  - data-plane submission scaffold (`submit-job`) with explicit not-configured behavior
+  - preflight gate required before live `start`
+  - per-session audit trail append hooks (command/preflight/submission)
+  - docs/runbook updates + deterministic test coverage
+- [x] M26: One-page operator layout + dual sidebar tabs
+  - single viewport desktop layout with minimized/avoided normal-operation page scroll
+  - right sidebar tab model for Placement Controls vs Live Status + Logs
+  - preserved Phase 4 guardrails and command safety behavior
+- [x] M27: Operator UX simplification (Artwork Intake left sidebar only)
+  - removed left sidebar tab UI and Connection Wizard panel from front screen
+  - dedicated full left panel to Artwork Intake
+  - retained underlying connection/runtime hooks in codebase for future relocation
+- [x] M28: Queue/controls reflow for jobs-first vertical space
+  - moved Queue + Controls under First Page Preview in left panel
+  - removed visible Command Eligibility panel from operator screen
+  - expanded center Jobs region while preserving one-page/no-scroll behavior
+- [x] M29: Data submitter contract hardening + deterministic harness
+  - documented `RIP_DATA_SUBMITTER_BIN` request/response contract (`docs/DATA_SUBMITTER_CONTRACT.md`)
+  - added submit payload validation gates in Electron backend
+  - added deterministic mock submitter and automated contract tests
+- [x] M30: Jobs panel compact table redesign
+  - replaced tall jobs rendering with dense single-row table/list presentation
+  - added practical columns (job label, size, mode, count, status) with placeholder fallbacks
+  - added keyboard-friendly row selection/focus styling in existing light red theme
+- [x] M31: Placement/Queue swap + Anyflow workflow tab grouping
+  - moved Placement Controls under First Page Preview in left Artwork Intake panel
+  - moved Queue + Controls to dedicated right-sidebar tab (keyboard-accessible tab semantics retained)
+  - grouped controls in Queue tab by operator workflow: Print Head Cleaning, Engine, Priming, Head, Job, Print Control
+  - intentionally omitted Declog Mode section while preserving existing command wiring/safety guardrails
+- [x] M31a: Preview/jobs vertical footprint rebalance
+  - increased Sheet Layout Preview vertical footprint for better operator visibility
+  - reduced Jobs panel footprint while keeping internal jobs-table scrolling
+  - preserved one-page/no-scroll app shell behavior
+- [x] M36: Stage 2 workspace relocation to Job Submission tab
+  - moved Artwork Intake and Sheet Layout Preview from Printhead Controls to Job Submission
+  - rebuilt Job Submission as left-controls / center-preview / right-info workspace while preserving existing behavior
+  - kept Printhead Controls focused on printhead/printer controls with existing guardrails and command logic
+- [x] M37: Production data-plane submitter binary scaffold
+  - added `scripts/production-data-submitter.js` contract-compatible binary for `RIP_DATA_SUBMITTER_BIN`
+  - deterministic dry-run spool bundling for JSL/GBOR handoff planning without printer dependency
+  - optional explicit live execution path (`RIP_SUBMIT_EXECUTE=1`) with command receipt capture
+  - added regression test coverage (`tests/production-data-submitter.test.js`)
+- [x] M39: Submitter spool report artifact + validation
+  - added deterministic submitter spool report generator (`scripts/submitter-report.js`)
+  - outputs `dist/SUBMITTER_REPORT.json` + `dist/SUBMITTER_REPORT.md` for dry-run/live handoff evidence
+  - added deterministic regression coverage (`tests/submitter-report.test.js`)
+- [x] M40: Deterministic completion guard for sprint handoff readiness
+  - added completion guard script (`scripts/completion-guard.js`) to verify required dist artifacts and TODO completion state
+  - added deterministic regression coverage (`tests/completion-guard.test.js`)
+  - wired npm scripts (`test:completion`, `guard:completion`) and CI checkpoint execution
+- [x] M40: Completion guard for overnight cron handoff readiness
+  - added deterministic completion guard script (`scripts/completion-guard.js`) to verify required artifacts and zero unchecked TODO tasks
+  - added regression coverage (`tests/completion-guard.test.js`)
+  - added npm wiring (`test:completion`, `guard:completion`) and included guard in CI chain
+- [x] M41: Deterministic ops snapshot timestamp override
+  - added `RIP_SNAPSHOT_TIMESTAMP` override support in `scripts/ops-snapshot.js`
+  - preserved live default behavior (`new Date().toISOString()`) when override is unset
+  - added deterministic regression coverage in `tests/ops-snapshot.test.js`
+- [x] M41: Deterministic Arrange quick presets (Anyflow-style repeat setup)
+  - added offline/local quick preset slots (A/B) to save/apply/clear current Arrange + Layout state in Job Submission
+  - preset application restores placement and arrange values with deterministic local persistence
+  - expanded deterministic UI harness snapshots (`tests/ui-harness.test.js`, `tests/snapshots/preset-apply.json`)
+- [x] M42: Deterministic config template audit artifact + regression gate
+  - added `scripts/config-audit.js` to validate `config.template.json` operator/live-hookup defaults
+  - emits deterministic artifacts: `dist/CONFIG_AUDIT.json` + `dist/CONFIG_AUDIT.md`
+  - added deterministic regression test: `tests/config-audit.test.js`
+  - wired npm scripts: `test:config`, `report:config`, and CI chain execution
+- [x] M43: Read-only discovery lock UX + deterministic harness coverage
+  - added explicit Discovery Lock toggle in Print Control for read-only discovery operation
+  - mutating print commands now hard-block when read-only discovery mode is enabled
+  - updated operator badges/hints to surface discovery lock state clearly
+  - expanded deterministic UI harness snapshots (`tests/ui-harness.test.js`, `tests/snapshots/discovery-mode-toggle.json`)
+
+## Remaining gaps after M39
+- [x] Implement production data-plane submitter binary (`RIP_DATA_SUBMITTER_BIN`) for true JSL/GBOR handoff.
+- [x] Add PES state-aware preflight checks using real status fields (beyond endpoint/polling/artwork checks).
+  - Added live-status preflight gating for stale telemetry, engine readiness state, and active fault list.
+  - Added deterministic regression test coverage (`tests/preflight-status-gates.test.js`).
+- [x] Add signed operator identity metadata (human username/badge id) into audit entries.
+  - Added runtime-config support for operator username/badge/secret overlays.
+  - Added backend audit signing (`sha256-v1`) and persisted operator identity envelope per audit row.
+  - Added deterministic regression coverage for runtime config + audit signing metadata.
+- [x] Add audit log viewer/export tooling and retention policy controls.
+  - Added in-app audit viewer filtering (`all`, `command`, `preflight`, `submit-job`).
+  - Added deterministic client-side exports (JSON + NDJSON) from current filtered audit view.
+  - Added configurable retention cap (`10-1000`) with immediate prune/apply control persisted in local state.

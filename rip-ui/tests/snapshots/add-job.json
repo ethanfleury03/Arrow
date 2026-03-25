@@ -1,0 +1,10 @@
+{
+  "counter": 3,
+  "jobIds": [
+    "JOB-0001",
+    "JOB-0002",
+    "JOB-0003"
+  ],
+  "queueTail": "submit(JOB-0003)",
+  "queueDepth": 3
+}

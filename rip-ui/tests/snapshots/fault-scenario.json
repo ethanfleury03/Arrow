@@ -1,0 +1,9 @@
+{
+  "lastResult": "FAIL: prepare requires at least one queued job",
+  "sequenceStep": "2/6",
+  "pipeline": "INVALID-SEQUENCE",
+  "jobStatuses": [
+    "held",
+    "held"
+  ]
+}

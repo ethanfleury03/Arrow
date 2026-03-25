@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT="/tmp/jsl_test/thrift_controller_fullcycle.py"
+PY="python2"
+
+export PDL_THRIFT_ROOT="/opt/memjet/PDL/MJ6.5.0-2.el7"
+export PYTHONPATH="$PDL_THRIFT_ROOT:$PDL_THRIFT_ROOT/memjet:$PDL_THRIFT_ROOT/Memjet:${PYTHONPATH:-}"
+
+DEFAULT_HOST="127.0.0.1"
+DEFAULT_CMD_PORT="13001"
+
+# --- helpers ---
+run_pesctl_cmds() {
+local CMDS="$1"
+local H="${2:-$DEFAULT_HOST}"
+local P="${3:-$DEFAULT_CMD_PORT}"
+
+IFS=',' read -r -a CMD_ARR <<< "$CMDS"
+"$PY" "$SCRIPT" "$H" "$P" "${CMD_ARR[@]}" 2>&1
+}
+
+op_to_cmds() {
+case "$1" in
+statusQuery|getStatus|getProductInfo) echo "statusjson" ;;
+clearJobQueue|clearQueue) echo "clear" ;;
+initialiseEngine) echo "initialise" ;;
+shutdownEngine) echo "shutdown" ;;
+prepareToPrint) echo "prepare" ;;
+startPrinting) echo "start" ;;
+finishPrinting) echo "finish" ;;
+
+# Bridge ops not implemented in thrift_controller_fullcycle.py
+# startServicing/startMovingPrintheads are handled via real KPesClient below.
+startPriming|startDepriming|replaceWipers|pausePrinting)
+echo "__MAINT_STUB__" ;;
+startServicing|clean_light|clean_medium|clean_heavy)
+echo "__START_SERVICING_REAL__" ;;
+startMovingPrintheads)
+echo "__START_MOVING_REAL__" ;;
+*) return 1 ;;
+esac
+}
+
+# -------------------------------------------------------------------
+# MODE A (legacy): pesctl "<cmd1,cmd2>" [host] [port]
+# MODE B (bridge): pesctl --op <operation> --args-b64 <...> --host <...> --command-port <...>
+# -------------------------------------------------------------------
+
+if [[ $# -lt 1 ]]; then
+echo "Usage:"
+echo " pesctl <cmds> [host] [port]"
+echo " pesctl --op <operation> [--host H] [--command-port P] [--args-b64 B64]"
+exit 2
+fi
+
+if [[ "${1:-}" != "--op" ]]; then
+# Legacy mode
+CMDS="$1"
+H="${2:-$DEFAULT_HOST}"
+P="${3:-$DEFAULT_CMD_PORT}"
+run_pesctl_cmds "$CMDS" "$H" "$P"
+exit $?
+fi
+# Bridge mode
+OP=""
+HOST="$DEFAULT_HOST"
+CMD_PORT="$DEFAULT_CMD_PORT"
+ARGS_B64=""
+
+while [[ $# -gt 0 ]]; do
+case "$1" in
+--op) OP="${2:-}"; shift 2 ;;
+--args-b64) ARGS_B64="${2:-}"; shift 2 ;; # accepted for compatibility
+--host) HOST="${2:-}"; shift 2 ;;
+--command-port) CMD_PORT="${2:-}"; shift 2 ;;
+--event-port) shift 2 ;; # accepted/ignored
+--data-port) shift 2 ;; # accepted/ignored
+*) shift ;;
+esac
+done
+
+if [[ -z "$OP" ]]; then
+echo '{"ok":false,"error":"missing_op"}'
+exit 2
+fi
+
+if ! CMDS="$(op_to_cmds "$OP")"; then
+echo "{\"ok\":false,\"error\":\"unsupported_op\",\"op\":\"$OP\"}"
+exit 3
+fi
+
+if [[ "$CMDS" == "__START_SERVICING_REAL__" ]]; then
+OUT="$(OP="$OP" ARGS_B64="$ARGS_B64" HOST="$HOST" CMD_PORT="$CMD_PORT" python2 - <<'PY'
+import os, sys, json, base64
+
+r = os.environ.get('PDL_THRIFT_ROOT', '/opt/memjet/PDL/MJ6.5.0-2.el7')
+sys.path[:0] = [r, r + '/memjet', r + '/Memjet']
+
+from memjet.psw.pdlib.thrift.pes_client import KPesClient, ServiceType
+
+op = os.environ.get('OP', '')
+args_b64 = os.environ.get('ARGS_B64', '')
+host = os.environ.get('HOST', '127.0.0.1')
+cmd_port = int(os.environ.get('CMD_PORT', '13001'))
+
+level = None
+if op in ('clean_light', 'clean_medium', 'clean_heavy'):
+    level = op.split('_', 1)[1].upper()
+
+payload = {}
+if args_b64:
+    try:
+        decoded = base64.b64decode(args_b64)
+        payload = json.loads(decoded)
+    except Exception:
+        payload = {}
+
+if level is None:
+    for k in ('serviceType', 'service_type', 'procedureName', 'procedure_name', 'level', 'service'):
+        v = payload.get(k)
+        if isinstance(v, basestring) and v.strip():
+            level = v.strip().upper()
+            break
+
+if not level:
+    raise RuntimeError('startServicing requires level/serviceType (LIGHT|MEDIUM|HEAVY)')
+
+service_map = {
+    'LIGHT': ServiceType.LIGHT,
+    'MEDIUM': ServiceType.MEDIUM,
+    'HEAVY': ServiceType.HEAVY,
+}
+if level not in service_map:
+    raise RuntimeError('unsupported service level: {}'.format(level))
+
+client = KPesClient(host=host)
+client.open_connection()
+client.startServicing([], service_map[level])
+
+print(json.dumps({
+    'ok': True,
+    'operation': op,
+    'host': host,
+    'commandPort': cmd_port,
+    'exitCode': 0,
+    'output': 'startServicing sent ({})'.format(level)
+}))
+PY
+)" || RC=$?
+RC=${RC:-0}
+if [[ "$RC" -ne 0 ]]; then
+  python2 - <<PY
+import json
+print(json.dumps({
+ "ok": False,
+ "operation": "$OP",
+ "host": "$HOST",
+ "commandPort": int("$CMD_PORT"),
+ "exitCode": int("$RC"),
+ "error": "startServicing_failed",
+ "output": """$OUT"""
+}))
+PY
+  exit "$RC"
+fi
+printf '%s\n' "$OUT"
+exit 0
+fi
+
+if [[ "$CMDS" == "__START_MOVING_REAL__" ]]; then
+OUT="$(OP="$OP" ARGS_B64="$ARGS_B64" HOST="$HOST" CMD_PORT="$CMD_PORT" python2 - <<'PY'
+import os, sys, json, base64
+
+r = os.environ.get('PDL_THRIFT_ROOT', '/opt/memjet/PDL/MJ6.5.0-2.el7')
+sys.path[:0] = [r, r + '/memjet', r + '/Memjet']
+
+from memjet.psw.pdlib.thrift.pes_client import KPesClient, PrintheadPosition
+
+op = os.environ.get('OP', '')
+args_b64 = os.environ.get('ARGS_B64', '')
+host = os.environ.get('HOST', '127.0.0.1')
+cmd_port = int(os.environ.get('CMD_PORT', '13001'))
+
+payload = {}
+if args_b64:
+    try:
+        decoded = base64.b64decode(args_b64)
+        payload = json.loads(decoded)
+    except Exception:
+        payload = {}
+
+print_units = payload.get('printUnits')
+if print_units is None:
+    for k in ('print_units', 'units'):
+        if k in payload:
+            print_units = payload.get(k)
+            break
+if print_units is None:
+    print_units = []
+if not isinstance(print_units, list):
+    raise RuntimeError('startMovingPrintheads requires printUnits as an array')
+
+position = payload.get('positionEnum')
+if position is None:
+    for k in ('position', 'printheadPosition', 'printhead_position'):
+        v = payload.get(k)
+        if v is not None:
+            position = v
+            break
+
+if position is None:
+    raise RuntimeError('startMovingPrintheads requires positionEnum/position (raised|capped|print)')
+
+if isinstance(position, basestring):
+    pnorm = position.strip().lower()
+else:
+    pnorm = str(position).strip().lower()
+
+position_map = {
+    'raised': PrintheadPosition.RAISED,
+    'capped': PrintheadPosition.CAPPED,
+    'print': PrintheadPosition.PRINT,
+}
+if pnorm not in position_map:
+    raise RuntimeError('unsupported printhead position: {}'.format(position))
+
+client = KPesClient(host=host)
+client.open_connection()
+client.startMovingPrintheads(print_units, position_map[pnorm])
+
+print(json.dumps({
+    'ok': True,
+    'operation': op,
+    'host': host,
+    'commandPort': cmd_port,
+    'exitCode': 0,
+    'output': 'startMovingPrintheads sent ({})'.format(pnorm)
+}))
+PY
+)" || RC=$?
+RC=${RC:-0}
+if [[ "$RC" -ne 0 ]]; then
+  python2 - <<PY
+import json
+print(json.dumps({
+ "ok": False,
+ "operation": "$OP",
+ "host": "$HOST",
+ "commandPort": int("$CMD_PORT"),
+ "exitCode": int("$RC"),
+ "error": "startMovingPrintheads_failed",
+ "output": """$OUT"""
+}))
+PY
+  exit "$RC"
+fi
+printf '%s\n' "$OUT"
+exit 0
+fi
+
+if [[ "$CMDS" == "__MAINT_STUB__" ]]; then
+python2 - <<PY
+import json
+print(json.dumps({
+ "ok": True,
+ "simulated": True,
+ "operation": "$OP",
+ "host": "$HOST",
+ "commandPort": int("$CMD_PORT"),
+ "exitCode": 0,
+ "output": "maintenance shim accepted; op not implemented by thrift_controller_fullcycle.py"
+}))
+PY
+exit 0
+fi
+
+if [[ "$CMDS" == "__STATUS_STUB__" ]]; then
+python2 - <<PY
+import json
+print(json.dumps({
+"ok": True,
+"operation": "$OP",
+"host": "$HOST",
+"commandPort": int("$CMD_PORT"),
+"exitCode": 0,
+"output": "status stub ok"
+}))
+PY
+exit 0
+fi
+
+OUT="$(run_pesctl_cmds "$CMDS" "$HOST" "$CMD_PORT")" || RC=$?
+RC=${RC:-0}
+
+python2 - <<PY
+import json
+print(json.dumps({
+"ok": int("$RC") == 0,
+"operation": "$OP",
+"host": "$HOST",
+"commandPort": int("$CMD_PORT"),
+"exitCode": int("$RC"),
+"output": """$OUT"""
+}))
+PY
+
+exit "$RC"

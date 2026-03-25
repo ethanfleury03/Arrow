@@ -1,0 +1,9 @@
+{
+  "lastResult": "PASS-RECOVERY: fault recovered and print lifecycle completed",
+  "sequenceStep": "5/6",
+  "pipeline": "RECOVERED",
+  "jobStatuses": [
+    "done",
+    "held"
+  ]
+}

@@ -1,0 +1,62 @@
+# pesctl maintenance shim patch instructions (for Ethan)
+
+Apply the following **exact** edits to `pesctl`.
+
+## 1) In `op_to_cmds()`, map maintenance ops to `__MAINT_STUB__`
+
+Replace this case arm:
+
+```bash
+# Bridge ops not implemented in thrift_controller_fullcycle.py
+# map to a safe no-op-ish supported verb for now (or change to `return 1` for strict mode)
+startServicing|startPriming|startDepriming|replaceWipers|startMovingPrintheads|pausePrinting)
+echo "prepare" ;;
+```
+
+With:
+
+```bash
+# Bridge ops not implemented in thrift_controller_fullcycle.py
+# Return explicit marker so we can shim success safely (no prepareToPrint side-effects)
+startServicing|startPriming|startDepriming|replaceWipers|startMovingPrintheads|pausePrinting)
+echo "__MAINT_STUB__" ;;
+```
+
+## 2) Add `__MAINT_STUB__` JSON shim before the `__STATUS_STUB__` check
+
+Find this existing line:
+
+```bash
+if [[ "$CMDS" == "__STATUS_STUB__" ]]; then
+```
+
+Insert this block immediately **before** it:
+
+```bash
+if [[ "$CMDS" == "__MAINT_STUB__" ]]; then
+python2 - <<PY
+import json
+print(json.dumps({
+  "ok": True,
+  "simulated": True,
+  "operation": "$OP",
+  "host": "$HOST",
+  "commandPort": int("$CMD_PORT"),
+  "exitCode": 0,
+  "output": "maintenance op accepted as shim; not implemented by thrift_controller_fullcycle.py"
+}))
+PY
+exit 0
+fi
+```
+
+## Quick verify
+
+```bash
+/usr/local/bin/pesctl --op startServicing --host 192.168.100.200 --command-port 13001
+```
+
+Expected JSON includes:
+- `"ok": true`
+- `"simulated": true`
+- `"exitCode": 0`
