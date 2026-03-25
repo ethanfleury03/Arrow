@@ -109,8 +109,8 @@ async function testGateEnforcementAndDryRunBehavior() {
     'preflight:false',
     'clearQueue',
     'initialiseEngine',
-    'prepareToPrint',
     'submitJobData',
+    'prepareToPrint',
     'startPrinting(simulated)',
     'finishPrinting'
   ]);
@@ -147,8 +147,8 @@ async function testSkipsInitialiseWhenEngineAlreadyOn() {
   assert.deepStrictEqual(calls, [
     'clearQueue',
     'initialiseEngine',
-    'prepareToPrint',
     'submitJobData',
+    'prepareToPrint',
     'startPrinting',
     'finishPrinting'
   ]);
