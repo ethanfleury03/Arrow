@@ -160,21 +160,23 @@ function escapeSingleQuotes(value) {
 
 function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const env = process.env;
-  const backend = String(env.MEMJET_REAL_BACKEND || 'local').trim().toLowerCase();
-  const sshHost = String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || '').trim();
-  const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || '').trim();
+  const backend = String(env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
+  const sshHost = String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || '192.168.100.200').trim();
+  const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || 'root').trim();
   const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || '').trim();
   const sshPort = Number(env.MEMJET_SSH_PORT || env.RIP_SSH_PORT || 22);
   const sshBin = String(env.MEMJET_SSH_BIN || 'ssh').trim();
   const sshTimeoutMs = Number(env.MEMJET_SSH_TIMEOUT_MS || 30000);
-  const cmdTemplate = String(env.MEMJET_SSH_REMOTE_CMD_TEMPLATE || '').trim();
+  const cmdTemplate = String(
+    env.MEMJET_SSH_REMOTE_CMD_TEMPLATE
+      || '/usr/local/bin/pesctl --op {operation} --args-b64 {args_json_b64} --host {host} --command-port {commandPort} --event-port {eventPort} --data-port {dataPort}'
+  ).trim();
 
   const missing = [];
   if (backend === 'ssh') {
     [
       requiredEnv('MEMJET_SSH_HOST', sshHost),
       requiredEnv('MEMJET_SSH_USER', sshUser),
-      requiredEnv('MEMJET_SSH_KEY_PATH', sshKeyPath),
       requiredEnv('MEMJET_SSH_REMOTE_CMD_TEMPLATE', cmdTemplate)
     ].forEach(v => { if (v) missing.push(v); });
   }
@@ -222,10 +224,10 @@ async function runSshOperation({ settings, operation, payload, logger }) {
   }
 
   const sshArgs = [
-    '-o', 'BatchMode=yes',
     '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'PreferredAuthentications=publickey,password,keyboard-interactive',
     '-p', String(settings.sshPort),
-    '-i', settings.sshKeyPath,
+    ...(settings.sshKeyPath ? ['-i', settings.sshKeyPath] : []),
     `${settings.sshUser}@${settings.sshHost}`,
     remoteCommand
   ];
@@ -637,15 +639,14 @@ function isSshConfigured(env = process.env) {
   return Boolean(
     String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || '').trim() &&
     String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || '').trim() &&
-    String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || '').trim() &&
     String(env.MEMJET_SSH_REMOTE_CMD_TEMPLATE || '').trim()
   );
 }
 
 function selectBackendCandidates(env = process.env) {
-  const requestedBackend = String(env.MEMJET_REAL_BACKEND || 'auto').trim().toLowerCase();
+  const requestedBackend = String(env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
   const candidates = requestedBackend === 'auto'
-    ? (isSshConfigured(env) ? ['local', 'ssh'] : ['local'])
+    ? (isSshConfigured(env) ? ['ssh', 'local'] : ['local'])
     : [requestedBackend];
   return { requestedBackend, candidates };
 }
