@@ -48,7 +48,7 @@ function loadBridgeConfig(env = process.env) {
     host: env.RIP_BRIDGE_HOST || '127.0.0.1',
     logLevel: env.RIP_BRIDGE_LOG_LEVEL || 'info',
     memjet: {
-      mode: 'real',
+      mode: env.MEMJET_MODE || 'real',
       host: targetHost,
       commandPort: targetCommandPort,
       eventPort: targetEventPort,
@@ -60,7 +60,7 @@ function loadBridgeConfig(env = process.env) {
       defaultIps: num(env.MEMJET_DEFAULT_IPS, 15),
       enableRealCommands: bool(env.RIP_BRIDGE_ENABLE_REAL_COMMANDS, true),
       enableRealStartPrint: bool(env.RIP_BRIDGE_ENABLE_REAL_START_PRINT, true),
-      dryRunRealSequence: false,
+      dryRunRealSequence: bool(env.RIP_BRIDGE_REAL_DRY_RUN, false),
       clientFactoryPath: env.MEMJET_THRIFT_CLIENT_FACTORY || path.join(arrowRoot, 'bridge', 'real-client-factory.local.js')
     },
     bridgeBaseUrl: env.RIP_BRIDGE_BASE_URL || `http://127.0.0.1:${port}`,
