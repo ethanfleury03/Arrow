@@ -643,11 +643,10 @@ function isSshConfigured(env = process.env) {
 }
 
 function selectBackendCandidates(env = process.env) {
-  const requestedBackend = String(env.MEMJET_REAL_BACKEND || 'auto').trim().toLowerCase();
-  const candidates = requestedBackend === 'auto'
-    ? (isSshConfigured(env) ? ['local', 'ssh'] : ['local'])
-    : [requestedBackend];
-  return { requestedBackend, candidates };
+  const requestedBackend = String(env.MEMJET_REAL_BACKEND || 'local').trim().toLowerCase();
+  // Production lock: real printing must use the local thrift client path only.
+  // Keep requestedBackend in diagnostics for visibility, but never route to ssh.
+  return { requestedBackend, candidates: ['local'] };
 }
 
 async function createClient(params) {
@@ -661,7 +660,7 @@ async function createClient(params) {
         : (candidate === 'ssh' ? await createSshClient(params) : null);
 
       if (!client) {
-        throw new Error(`Unsupported MEMJET_REAL_BACKEND=${candidate}. Allowed: auto, local, ssh`);
+        throw new Error(`Unsupported backend candidate ${candidate}. Allowed: local`);
       }
 
       if (typeof client.startMovingPrintheads !== 'function') {
