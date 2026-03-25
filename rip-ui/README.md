@@ -150,10 +150,11 @@ These values are embedded into each audit row with a deterministic SHA-256 signa
 npm run bridge:start
 ```
 - Added first-print readiness endpoint: `POST /api/device/preflight`.
-- Real PES command path is now gate-controlled:
-  - `RIP_BRIDGE_ENABLE_REAL_COMMANDS=false` (default)
-  - `RIP_BRIDGE_ENABLE_REAL_START_PRINT=false` (default)
-  - `RIP_BRIDGE_REAL_DRY_RUN=true` (default; no physical start)
+- Real PES command path is now gate-controlled (defaults are production/real):
+  - `RIP_BRIDGE_ENABLE_REAL_COMMANDS=true` (default)
+  - `RIP_BRIDGE_ENABLE_REAL_START_PRINT=true` (default)
+  - `RIP_BRIDGE_REAL_DRY_RUN=false` (default; physical start allowed)
+  - `MEMJET_ALLOW_DATA_SUBMISSION=true` (default)
 - Real client backend selector:
   - `MEMJET_REAL_BACKEND=local` (default, existing local Python+gborcat path)
   - `MEMJET_REAL_BACKEND=ssh` (remote Linux wrapper over SSH; see `docs/RIP_BRIDGE_V1.md` for required env)
