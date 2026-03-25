@@ -6,7 +6,7 @@ const DEFAULT_PROFILE = 'kareela-lab';
 const OPERATOR_PROFILES = {
   'kareela-lab': {
     backendMode: 'bridge-http',
-    host: '192.168.111.2',
+    host: '192.168.111.1',
     commandPort: 13002,
     eventPort: 9231,
     dataPort: 13001,

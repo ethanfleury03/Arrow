@@ -3,7 +3,7 @@ const { loadBridgeConfig } = require('../bridge/config');
 
 function run() {
   const defaults = loadBridgeConfig({});
-  assert.equal(defaults.memjet.host, '192.168.111.2');
+  assert.equal(defaults.memjet.host, '192.168.111.1');
   assert.equal(defaults.memjet.commandPort, 13002);
   assert.equal(defaults.memjet.eventPort, 9231);
   assert.equal(defaults.memjet.dataPort, 13001);
