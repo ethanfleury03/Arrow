@@ -464,34 +464,88 @@ class BridgeHttpAdapter {
       });
     }
 
-    const args = Array.isArray(payload?.args) ? payload.args.filter(arg => typeof arg === 'string' && arg.trim()) : [];
-    const env = payload?.env && typeof payload.env === 'object' ? payload.env : {};
-
-    const created = await this.request('POST', '/jobs', {
-      input_path: inputPath,
-      args,
-      env
-    }, { baseUrl: this.getAdapterBaseUrl() });
-
-    const jobId = firstDefinedString(created?.id, created?.jobId, payload?.jobId);
-    let status = firstDefinedString(created?.status, 'queued');
-
-    if (jobId) {
-      try {
-        const latest = await this.request('GET', `/jobs/${jobId}`, undefined, { baseUrl: this.getAdapterBaseUrl() });
-        status = firstDefinedString(latest?.status, status);
-      } catch {
-        // Non-fatal: job was accepted already.
+    const copiesFromArgs = (() => {
+      const args = Array.isArray(payload?.args) ? payload.args : [];
+      for (let i = 0; i < args.length; i += 1) {
+        const arg = String(args[i] || '').trim();
+        if (arg === '--copies') {
+          const value = Number(args[i + 1]);
+          if (Number.isFinite(value) && value > 0) return Math.floor(value);
+        }
+        if (arg.startsWith('--copies=')) {
+          const value = Number(arg.slice('--copies='.length));
+          if (Number.isFinite(value) && value > 0) return Math.floor(value);
+        }
       }
-    }
+      return null;
+    })();
 
-    return {
-      accepted: true,
-      status,
-      message: null,
-      jobId: jobId || null,
-      timestamp: nowIso()
-    };
+    const copies = Number.isFinite(Number(payload?.copies))
+      ? Math.max(1, Math.floor(Number(payload.copies)))
+      : (copiesFromArgs || 1);
+
+    // Preferred path: orchestrate real print sequence through bridge job pipeline.
+    try {
+      const ingest = await this.request('POST', '/api/jobs/ingest', {
+        jobId: firstDefinedString(payload?.jobId) || undefined,
+        filePath: inputPath,
+        fileName: firstDefinedString(payload?.fileName) || undefined,
+        copies
+      }, { baseUrl: this.getBridgeBaseUrl() });
+
+      const bridgeJobId = firstDefinedString(ingest?.jobId, ingest?.id, payload?.jobId);
+      if (!bridgeJobId) {
+        throw new RipBackendError('BRIDGE_UNAVAILABLE', 'Bridge ingest did not return a job id.', {
+          remediation: 'Verify bridge /api/jobs/ingest response contract includes jobId.'
+        });
+      }
+
+      const sent = await this.request('POST', `/api/jobs/${bridgeJobId}/send`, { copies }, { baseUrl: this.getBridgeBaseUrl() });
+      const finalStatus = firstDefinedString(sent?.state, sent?.status, 'completed');
+
+      return {
+        accepted: true,
+        status: finalStatus,
+        message: null,
+        jobId: bridgeJobId,
+        timestamp: nowIso()
+      };
+    } catch (bridgeError) {
+      // Fallback: direct RIP adapter queueing path (legacy behavior).
+      const args = Array.isArray(payload?.args) ? payload.args.filter(arg => typeof arg === 'string' && arg.trim()) : [];
+      const env = payload?.env && typeof payload.env === 'object' ? payload.env : {};
+
+      const created = await this.request('POST', '/jobs', {
+        input_path: inputPath,
+        args,
+        env
+      }, { baseUrl: this.getAdapterBaseUrl() });
+
+      const jobId = firstDefinedString(created?.id, created?.jobId, payload?.jobId);
+      let status = firstDefinedString(created?.status, 'queued');
+
+      if (jobId) {
+        try {
+          const latest = await this.request('GET', `/jobs/${jobId}`, undefined, { baseUrl: this.getAdapterBaseUrl() });
+          status = firstDefinedString(latest?.status, status);
+        } catch {
+          // Non-fatal: job was accepted already.
+        }
+      }
+
+      this.logger?.warn?.('[rip-backend] submitJob bridge pipeline unavailable; falling back to adapter /jobs path.', {
+        bridgeError: bridgeError?.message || String(bridgeError),
+        inputPath
+      });
+
+      return {
+        accepted: true,
+        status,
+        message: null,
+        jobId: jobId || null,
+        timestamp: nowIso()
+      };
+    }
   }
 }
 

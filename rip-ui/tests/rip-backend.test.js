@@ -157,6 +157,54 @@ async function run() {
     );
   });
 
+  await withServer((req, res) => {
+    if (req.method === 'POST' && req.url === '/api/jobs/ingest') {
+      let body = '';
+      req.on('data', chunk => { body += String(chunk); });
+      req.on('end', () => {
+        const parsed = JSON.parse(body || '{}');
+        assert.equal(parsed.filePath, '/tmp/mock-job.pdf');
+        assert.equal(parsed.copies, 3);
+        res.writeHead(201, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ jobId: 'JOB_BRIDGE_001', state: 'validated' }));
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/api/jobs/JOB_BRIDGE_001/send') {
+      let body = '';
+      req.on('data', chunk => { body += String(chunk); });
+      req.on('end', () => {
+        const parsed = JSON.parse(body || '{}');
+        assert.equal(parsed.copies, 3);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ jobId: 'JOB_BRIDGE_001', state: 'completed' }));
+      });
+      return;
+    }
+
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not_found' }));
+  }, async port => {
+    const backend = createRipBackend({
+      mode: 'bridge-http',
+      runtimeConfig: { bridgeHost: '127.0.0.1', bridgePort: port },
+      logger: { warn() {}, error() {} }
+    });
+
+    const result = await backend.submitJob({
+      jobId: 'LOCAL_JOB_123',
+      inputPath: '/tmp/mock-job.pdf',
+      args: ['--copies', '3'],
+      config: { host: '127.0.0.1', commandPort: 13002 },
+      settings: { inputPath: '/tmp/mock-job.pdf' }
+    });
+
+    assert.equal(result.accepted, true);
+    assert.equal(result.jobId, 'JOB_BRIDGE_001');
+    assert.equal(result.status, 'completed');
+  });
+
   const unavailable = createRipBackend({
     mode: 'bridge-http',
     runtimeConfig: { bridgeHost: '127.0.0.1', bridgePort: 1 },
