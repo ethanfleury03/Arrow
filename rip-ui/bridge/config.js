@@ -27,8 +27,15 @@ function pickNumber(values, fallback) {
   return fallback;
 }
 
+function resolveArrowRoot(env = process.env) {
+  const configured = String(env.ARROW_ROOT || '').trim();
+  if (configured) return path.resolve(configured);
+  return path.resolve(__dirname, '..');
+}
+
 function loadBridgeConfig(env = process.env) {
   const port = num(env.RIP_BRIDGE_PORT, 8787);
+  const arrowRoot = resolveArrowRoot(env);
 
   // MEMJET_TARGET_* is the forced/locked target override and always wins when set.
   const targetHost = pickString(env.MEMJET_TARGET_HOST, env.MEMJET_HOST, '192.168.111.2');
@@ -54,12 +61,12 @@ function loadBridgeConfig(env = process.env) {
       enableRealCommands: bool(env.RIP_BRIDGE_ENABLE_REAL_COMMANDS, false),
       enableRealStartPrint: bool(env.RIP_BRIDGE_ENABLE_REAL_START_PRINT, false),
       dryRunRealSequence: bool(env.RIP_BRIDGE_REAL_DRY_RUN, true),
-      clientFactoryPath: env.MEMJET_THRIFT_CLIENT_FACTORY || path.join(process.cwd(), 'bridge', 'real-client-factory.local.js')
+      clientFactoryPath: env.MEMJET_THRIFT_CLIENT_FACTORY || path.join(arrowRoot, 'bridge', 'real-client-factory.local.js')
     },
     bridgeBaseUrl: env.RIP_BRIDGE_BASE_URL || `http://127.0.0.1:${port}`,
-    logDir: env.RIP_BRIDGE_LOG_DIR || path.join(process.cwd(), 'logs'),
-    dataDir: env.RIP_BRIDGE_DATA_DIR || path.join(process.cwd(), 'bridge-data')
+    logDir: env.RIP_BRIDGE_LOG_DIR || path.join(arrowRoot, 'logs'),
+    dataDir: env.RIP_BRIDGE_DATA_DIR || path.join(arrowRoot, 'bridge-data')
   };
 }
 
-module.exports = { loadBridgeConfig };
+module.exports = { loadBridgeConfig, resolveArrowRoot };

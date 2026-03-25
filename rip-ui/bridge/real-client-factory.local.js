@@ -101,15 +101,20 @@ function normalizePrintheadPositionEnum(rawPosition) {
 }
 
 function workspaceRoot() {
+  const configured = String(process.env.ARROW_ROOT || '').trim();
+  if (configured) return path.resolve(configured);
   return path.resolve(__dirname, '..');
 }
 
 function buildPythonPaths() {
   const root = workspaceRoot();
-  return [
+  const candidates = [
+    path.join(root, 'rip_consolidated_projects', 'development', 'pdl-source', 'kareela', 'py'),
+    path.join(root, 'rip_consolidated_projects', 'development', 'pdl-source', 'PDL', 'MJ6.5.0-2.el7'),
     path.join(root, '..', 'rip_consolidated_projects', 'development', 'pdl-source', 'kareela', 'py'),
     path.join(root, '..', 'rip_consolidated_projects', 'development', 'pdl-source', 'PDL', 'MJ6.5.0-2.el7')
   ];
+  return [...new Set(candidates.map(p => path.resolve(p)))];
 }
 
 function fileReadable(filePath) {

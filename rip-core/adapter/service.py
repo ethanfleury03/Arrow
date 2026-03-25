@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import threading
 import uuid
@@ -15,7 +16,6 @@ from pydantic import BaseModel, Field, field_validator
 
 
 MAX_LOG_TAIL = 200
-DEFAULT_RIP_COMMAND = ["./src/build/memjet-rip"]
 DEFAULT_PES_IP = "192.168.100.200"
 DEFAULT_PES_PORT = "13001"
 
@@ -54,11 +54,31 @@ _jobs: Dict[str, Dict[str, Any]] = {}
 _lock = threading.Lock()
 
 
+def _repo_root() -> Path:
+    override = os.getenv("ARROW_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    # rip-core/adapter/service.py -> repo root is ../..
+    return Path(__file__).resolve().parents[2]
+
+
 def _default_command() -> List[str]:
-    raw = os.getenv("RIP_COMMAND")
+    raw = os.getenv("RIP_COMMAND", "").strip()
     if raw:
-        return raw.split()
-    return DEFAULT_RIP_COMMAND
+        return shlex.split(raw)
+
+    root = _repo_root()
+    candidates = [
+        root / "rip-core" / "src" / "build" / "memjet-rip",
+        root / "src" / "build" / "memjet-rip",  # when running from rip-core as root
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return [str(candidate)]
+
+    # final fallback preserves old behavior for local dev/debug
+    return ["./src/build/memjet-rip"]
 
 
 def _append_log(job: Dict[str, Any], line: str) -> None:
