@@ -3,6 +3,11 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { AdapterCapabilityError } = require('./memjet-adapter');
 
+function isIgnorableInitialiseError(error) {
+  const msg = String(error?.message || '').toLowerCase();
+  return msg.includes('engine must be off');
+}
+
 const JOB_STATES = {
   DRAFT: 'draft',
   VALIDATED: 'validated',
@@ -161,7 +166,17 @@ class JobManager {
       this.emit('job.send.step', { jobId: job.jobId, runId: job.runId, step: 'clearQueue' });
       await this.adapter.clearQueue({ jobId: job.jobId });
       this.emit('job.send.step', { jobId: job.jobId, runId: job.runId, step: 'initialiseEngine' });
-      await this.adapter.initialiseEngine({ jobId: job.jobId });
+      try {
+        await this.adapter.initialiseEngine({ jobId: job.jobId });
+      } catch (error) {
+        if (!isIgnorableInitialiseError(error)) throw error;
+        this.emit('job.send.step', {
+          jobId: job.jobId,
+          runId: job.runId,
+          step: 'initialiseEngine:skipped',
+          reason: 'engine_already_on'
+        });
+      }
       this.transition(job, JOB_STATES.PREPARING);
       this.emit('job.send.step', { jobId: job.jobId, runId: job.runId, step: 'prepareToPrint' });
       await this.adapter.prepareToPrint({ jobId: job.jobId, copies: job.copies });
