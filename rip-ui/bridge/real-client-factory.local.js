@@ -620,14 +620,66 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
       }
 
       const normalized = normalizeJobId(jobId);
-      return call('submitJobData', {
-        jobId: normalized.jobId,
-        requestedJobId: jobId || null,
-        normalizedJobId: normalized.normalized,
-        artifactPath: resolvedArtifact,
-        host: String(host),
-        dataPort: Number(dataPort)
-      });
+      try {
+        return await call('submitJobData', {
+          jobId: normalized.jobId,
+          requestedJobId: jobId || null,
+          normalizedJobId: normalized.normalized,
+          artifactPath: resolvedArtifact,
+          host: String(host),
+          dataPort: Number(dataPort)
+        });
+      } catch (error) {
+        const msg = String(error?.message || '');
+        const allowFallback = String(process.env.MEMJET_SSH_SUBMIT_FALLBACK_LOCAL_GBORCAT || '1').trim() !== '0';
+        if (!allowFallback || !/unsupported_op/i.test(msg) || !/submitJobData/i.test(msg)) {
+          throw error;
+        }
+
+        const plan = buildGborcatCommand({
+          host,
+          dataPort,
+          jobId: normalized.jobId,
+          artifactPath: resolvedArtifact
+        });
+
+        if (logger?.warn) {
+          logger.warn({
+            msg: 'memjet.submitJobData.fallback_local_gborcat',
+            reason: 'remote_pesctl_unsupported_op',
+            tool: plan.tool,
+            args: plan.args,
+            host,
+            dataPort
+          });
+        }
+
+        try {
+          const { stdout, stderr } = await execFileAsync(plan.tool, plan.args, {
+            timeout: Number(process.env.MEMJET_SUBMIT_TIMEOUT_MS || 30000),
+            maxBuffer: 4 * 1024 * 1024
+          });
+
+          return {
+            ok: true,
+            method: 'submitJobData',
+            fallback: 'local-gborcat',
+            submissionTool: plan.tool,
+            submissionArgs: plan.args,
+            requestedJobId: jobId || null,
+            effectiveJobId: normalized.jobId,
+            normalizedJobId: normalized.normalized,
+            artifactPath: resolvedArtifact,
+            stdout: String(stdout || '').trim().slice(0, 4000),
+            stderr: String(stderr || '').trim().slice(0, 4000)
+          };
+        } catch (gborErr) {
+          const stderr = String(gborErr?.stderr || '').trim();
+          const stdout = String(gborErr?.stdout || '').trim();
+          const code = gborErr?.code ?? gborErr?.signal ?? 'unknown';
+          throw new Error(`submitJobData fallback gborcat failed (${code}). stdout=${stdout || 'n/a'} stderr=${stderr || 'n/a'}`);
+        }
+      }
     },
 
     startPrinting: async () => call('startPrinting', {}),
