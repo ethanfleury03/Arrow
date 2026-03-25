@@ -208,9 +208,11 @@ function interpolateTemplate(template, vars) {
 async function runSshOperation({ settings, operation, payload, logger }) {
   const argsJson = JSON.stringify(payload || {});
   const argsJsonB64 = Buffer.from(argsJson, 'utf8').toString('base64');
+  const remoteOperation = operation === 'getStatus' ? 'statusjson' : operation;
 
   const remoteCommand = interpolateTemplate(settings.cmdTemplate, {
-    operation,
+    operation: remoteOperation,
+    operation_original: operation,
     args_json: argsJson,
     args_json_escaped: escapeSingleQuotes(argsJson),
     args_json_b64: argsJsonB64,
