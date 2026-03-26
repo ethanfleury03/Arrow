@@ -467,24 +467,18 @@ class BridgeHttpAdapter {
         details: status?.details || null,
         timestamp: status?.lastUpdate || nowIso()
       };
-    } catch (bridgeError) {
-      // Fallback 1: bridge health endpoint on the same bridge base URL.
-      try {
-        const health = await this.request('GET', '/api/health', undefined, { baseUrl: this.getBridgeBaseUrl() });
-        return {
-          engineState: health?.ok ? 'UNKNOWN' : 'DOWN',
-          engineStateRawNumeric: null,
-          engineStateRawLabel: health?.ok ? 'BRIDGE_HEALTHY_STATUS_UNAVAILABLE' : 'BRIDGE_DOWN',
-          engineStateCanonical: health?.ok ? null : 'DOWN',
-          queueLength: 0,
-          faults: [],
-          inkLevels: { C: 0, M: 0, Y: 0, K: 0 },
-          details: null,
-          timestamp: nowIso()
-        };
-      } catch (_bridgeHealthError) {
-        throw bridgeError;
-      }
+    } catch (_bridgeError) {
+      // Fallback: RIP adapter health endpoint when bridge status API is unavailable.
+      const health = await this.request('GET', '/health', undefined, { baseUrl: this.getAdapterBaseUrl() });
+      return {
+        engineState: health?.ok ? 'READY' : 'UNKNOWN',
+        engineStateRawNumeric: null,
+        engineStateRawLabel: health?.ok ? 'ADAPTER_OK' : 'UNKNOWN',
+        engineStateCanonical: health?.ok ? 'READY' : null,
+        queueLength: 0,
+        faults: [],
+        timestamp: nowIso()
+      };
     }
   }
 
