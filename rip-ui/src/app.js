@@ -1162,11 +1162,19 @@ function render() {
     const rows = [];
     const totalRows = Math.max(MIN_VISIBLE_QUEUE_ROWS, state.jobs.length);
 
+    const queuedJobIds = state.jobs
+      .filter(job => String(job.status || '').toLowerCase() === 'queued')
+      .map(job => job.id);
+    const activeJob = state.jobs.find(job => ['sending', 'printing'].includes(String(job.status || '').toLowerCase()));
+    const activeJobId = activeJob?.id || null;
+    const nextUpJobId = queuedJobIds[0] || null;
+
     for (let i = 0; i < totalRows; i += 1) {
       const job = state.jobs[i];
       if (!job) {
         rows.push(`<tr class="is-placeholder" aria-hidden="true">
           <td class="cell-job" aria-label="Empty queue row">—</td>
+          <td class="cell-position">—</td>
           <td class="cell-size">—</td>
           <td class="cell-mode">—</td>
           <td class="cell-count">—</td>
@@ -1178,12 +1186,21 @@ function render() {
       const meta = getJobMeta(job);
       const fullJob = `${meta.id} · ${meta.name}`;
       const selected = selectedJobId === job.id;
+      const queuePos = queuedJobIds.indexOf(job.id);
+      const queuePosLabel = queuePos >= 0 ? `#${queuePos + 1}` : '—';
+      const roleBadges = [];
+      if (job.id === activeJobId) roleBadges.push('<span class="job-badge is-active">Active</span>');
+      if (job.id === nextUpJobId) roleBadges.push('<span class="job-badge is-next">Next Up</span>');
+      const roleBadgesHtml = roleBadges.length > 0 ? `<div class="job-badges">${roleBadges.join('')}</div>` : '';
+      const statusLower = String(job.status || '').toLowerCase();
+
       rows.push(`<tr data-job-id="${escapeHtml(job.id)}" tabindex="0" role="button" aria-label="Select job ${escapeHtml(fullJob)}" aria-selected="${selected ? 'true' : 'false'}" class="${selected ? 'is-selected' : ''}">
-        <td class="cell-job" title="${escapeHtml(fullJob)}">${escapeHtml(fullJob)}</td>
+        <td class="cell-job" title="${escapeHtml(fullJob)}">${escapeHtml(fullJob)}${roleBadgesHtml}</td>
+        <td class="cell-position" title="Queue position">${escapeHtml(queuePosLabel)}</td>
         <td class="cell-size" title="${escapeHtml(meta.size)}">${escapeHtml(meta.size)}</td>
         <td class="cell-mode" title="${escapeHtml(meta.mode)}">${escapeHtml(meta.mode)}</td>
         <td class="cell-count" title="${escapeHtml(meta.count)}">${escapeHtml(meta.count)}</td>
-        <td class="cell-status" title="${escapeHtml(meta.status)}">${escapeHtml(meta.status)}</td>
+        <td class="cell-status"><span class="status-pill status-${escapeHtml(statusLower)}" title="${escapeHtml(meta.status)}">${escapeHtml(meta.status)}</span></td>
       </tr>`);
     }
 
