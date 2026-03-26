@@ -439,11 +439,24 @@ function createBridgeServer(options = {}) {
         if (!latestRawDeviceStatus) {
           await pollSystemState();
         }
-        return json(res, 200, latestRawDeviceStatus || {
-          connected: false,
-          degraded: true,
-          details: null,
-          lastUpdate: new Date().toISOString()
+
+        const raw = latestRawDeviceStatus || {};
+        const snapshot = latestSystemState || {};
+
+        return json(res, 200, {
+          ...raw,
+          engineState: snapshot.engineState || raw.engineState || 'UNKNOWN',
+          engineStateRawNumeric: Number.isInteger(snapshot.engineStateRawNumeric)
+            ? snapshot.engineStateRawNumeric
+            : (Number.isInteger(raw.engineStateRawNumeric) ? raw.engineStateRawNumeric : null),
+          engineStateRawLabel: String(snapshot.engineStateRawLabel || raw.engineStateRawLabel || 'UNKNOWN'),
+          engineStateCanonical: snapshot.engineStateCanonical || raw.engineStateCanonical || null,
+          queueLength: Number(snapshot.queueLength ?? raw.queueLength ?? 0),
+          inkLevels: snapshot.inkLevels || extractInkLevels(raw),
+          connected: Boolean(snapshot.connected ?? raw.connected),
+          degraded: Boolean(snapshot.degraded ?? raw.degraded),
+          source: 'bridge-http',
+          lastUpdate: snapshot.timestamp || raw.lastUpdate || new Date().toISOString()
         });
       }
 
