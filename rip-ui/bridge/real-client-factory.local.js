@@ -167,7 +167,7 @@ function getSubmitMode() {
   return String(process.env.MEMJET_SUBMIT_MODE || 'memjet-rip').trim().toLowerCase();
 }
 
-function buildMemjetRipCommand({ artifactPath, host, dataPort }) {
+function buildMemjetRipCommand({ artifactPath, host, dataPort, copies = 1 }) {
   const repoRoot = path.resolve(process.cwd(), '..');
   const configured = process.env.MEMJET_RIP_BIN || process.env.MEMJET_SUBMITTER_BIN || process.env.RIP_MEMJET_RIP_BIN;
   const defaultWinBin = path.resolve(repoRoot, 'rip-core', 'src', 'build', 'Release', 'memjet-rip.exe');
@@ -179,7 +179,14 @@ function buildMemjetRipCommand({ artifactPath, host, dataPort }) {
   const effectiveHost = ARROW_PES.host;
   const effectiveDataPort = ARROW_PES.dataPort;
   const args = [String(artifactPath), '--pes-ip', String(effectiveHost), '--pes-port', String(effectiveDataPort), '-v'];
-  return { tool, args, tempDir, ripCoreRoot, jslConfigPath };
+  return {
+    tool,
+    args,
+    tempDir,
+    ripCoreRoot,
+    jslConfigPath,
+    copies: Number.isFinite(Number(copies)) && Number(copies) > 0 ? Math.floor(Number(copies)) : 1
+  };
 }
 
 function isPrintedButTerminalAckTimedOut(stdout = '', stderr = '') {
@@ -199,8 +206,8 @@ function isPrintedButTerminalAckTimedOut(stdout = '', stderr = '') {
   return hadDataSubmit && hadStart && hadTerminalTimeout;
 }
 
-async function runMemjetRipSubmit({ artifactPath, host, dataPort, logger, requestedJobId = null, normalizedJobId = null, normalizedFlag = false }) {
-  const plan = buildMemjetRipCommand({ artifactPath, host, dataPort });
+async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, logger, requestedJobId = null, normalizedJobId = null, normalizedFlag = false }) {
+  const plan = buildMemjetRipCommand({ artifactPath, host, dataPort, copies });
 
   if (process.platform === 'win32') {
     try {
@@ -218,6 +225,7 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, logger, reques
       tempDir: plan.tempDir,
       jslConfigPath: plan.jslConfigPath,
       ripCoreRoot: plan.ripCoreRoot,
+      copies: plan.copies,
       host,
       dataPort
     });
@@ -232,7 +240,8 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, logger, reques
         ...process.env,
         TEMP: plan.tempDir,
         TMP: plan.tempDir,
-        JSL_CONFIG_PATH: plan.jslConfigPath
+        JSL_CONFIG_PATH: plan.jslConfigPath,
+        JSL_NUM_COPIES: String(plan.copies)
       }
     });
 
@@ -692,7 +701,7 @@ async function createLocalClient({ host, commandPort, dataPort, protocol, transp
     pausePrinting: async targetPage => call('pausePrinting', [targetPage == null ? null : Number(targetPage)]),
     prepareToPrint: async ips => call('prepareToPrint', [Number(ips)]),
 
-    submitJobData: async ({ jobId, artifactPath } = {}) => {
+    submitJobData: async ({ jobId, artifactPath, copies = 1 } = {}) => {
       const resolvedArtifact = artifactPath ? path.resolve(String(artifactPath)) : null;
       if (!resolvedArtifact) {
         throw new Error('submitJobData requires artifactPath');
@@ -711,7 +720,8 @@ async function createLocalClient({ host, commandPort, dataPort, protocol, transp
           logger,
           requestedJobId: jobId || null,
           normalizedJobId: normalized.jobId,
-          normalizedFlag: normalized.normalized
+          normalizedFlag: normalized.normalized,
+          copies
         });
       }
 
@@ -876,7 +886,7 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
     pausePrinting: async targetPage => call('pausePrinting', { targetPage: targetPage == null ? null : Number(targetPage) }),
     prepareToPrint: async ips => call('prepareToPrint', { intendedSpeedIps: Number(ips) }),
 
-    submitJobData: async ({ jobId, artifactPath } = {}) => {
+    submitJobData: async ({ jobId, artifactPath, copies = 1 } = {}) => {
       const runOnce = async () => {
         const resolvedArtifact = artifactPath ? path.resolve(String(artifactPath)) : null;
         if (!resolvedArtifact) {
@@ -898,7 +908,8 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
             logger,
             requestedJobId: jobId || null,
             normalizedJobId: normalized.jobId,
-            normalizedFlag: normalized.normalized
+            normalizedFlag: normalized.normalized,
+            copies
           });
         }
 
@@ -926,7 +937,8 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
               logger,
               requestedJobId: jobId || null,
               normalizedJobId: normalized.jobId,
-              normalizedFlag: normalized.normalized
+              normalizedFlag: normalized.normalized,
+              copies
             });
           }
 
