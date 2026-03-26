@@ -117,10 +117,7 @@ const INITIAL_STATE = {
     filterType: 'all'
   },
   controls: {
-    link1GbOnline: false,
-    link10GbOnline: false,
-    autoSendEnabled: false,
-    globalOnline: null
+    autoSendEnabled: false
   },
   logs: [],
   ui: {
@@ -1107,43 +1104,18 @@ function tryAutoDispatchNextJob(source = 'auto-send') {
 }
 
 function resolveGlobalOnlineState() {
+  // Operator rule: if status polling is running, system is considered online.
+  if (state.liveStatus?.running) return true;
+
   const connectionStatus = String(state.status?.connection || '').toUpperCase();
   if (connectionStatus.includes('OFFLINE')) return false;
   if (connectionStatus.includes('ONLINE') || connectionStatus.includes('READY') || connectionStatus.includes('CONNECTED')) return true;
 
-  // Fallback UI placeholder state when no backend/global status source is available.
-  if (typeof state.controls?.globalOnline === 'boolean') return state.controls.globalOnline;
-
-  return Boolean(state.controls?.link1GbOnline || state.controls?.link10GbOnline);
+  return false;
 }
 
 function renderImportantControls() {
   const controls = state.controls || INITIAL_STATE.controls;
-  const linkMap = [
-    {
-      id: 'btnLink1Gb',
-      on: Boolean(controls.link1GbOnline),
-      onLabel: '1 gigabit ethernet link online',
-      offLabel: '1 gigabit ethernet link offline'
-    },
-    {
-      id: 'btnLink10Gb',
-      on: Boolean(controls.link10GbOnline),
-      onLabel: '10 gigabit ethernet link online',
-      offLabel: '10 gigabit ethernet link offline'
-    }
-  ];
-
-  linkMap.forEach(link => {
-    const btn = document.getElementById(link.id);
-    if (!btn) return;
-    if (btn.dataset) btn.dataset.linkState = link.on ? 'on' : 'off';
-    if (typeof btn.setAttribute === 'function') {
-      btn.setAttribute('aria-pressed', link.on ? 'true' : 'false');
-      btn.setAttribute('aria-label', link.on ? link.onLabel : link.offLabel);
-    }
-    btn.title = link.id === 'btnLink10Gb' ? '10Gb Ethernet link' : '1Gb Ethernet link';
-  });
 
   const globalState = resolveGlobalOnlineState();
   const globalEl = document.getElementById('globalConnectivity');
@@ -4031,16 +4003,6 @@ function rotateArtworkBy90() {
   persistState();
 }
 
-function toggleLinkState(linkKey) {
-  if (!state.controls) state.controls = deepClone(INITIAL_STATE.controls);
-  if (!(linkKey in state.controls)) return;
-  state.controls[linkKey] = !state.controls[linkKey];
-  const label = linkKey === 'link10GbOnline' ? '10Gb' : '1Gb';
-  log(`${label} link ${state.controls[linkKey] ? 'enabled' : 'disabled'} in UI.`);
-  render();
-  persistState();
-}
-
 function toggleAutoSend() {
   if (!state.controls) state.controls = deepClone(INITIAL_STATE.controls);
   state.controls.autoSendEnabled = !state.controls.autoSendEnabled;
@@ -4263,8 +4225,6 @@ function bind() {
   bindClick('btnAlignTop', () => setAlign('y', 'top'));
   bindClick('btnAlignMiddle', () => setAlign('y', 'middle'));
   bindClick('btnAlignBottom', () => setAlign('y', 'bottom'));
-  bindClick('btnLink1Gb', () => toggleLinkState('link1GbOnline'));
-  bindClick('btnLink10Gb', () => toggleLinkState('link10GbOnline'));
   bindClick('btnAutoSendToggle', toggleAutoSend);
   bindClick('btnToggleDiscoveryMode', toggleDiscoveryMode);
   bindClick('btnFlipHorizontal', () => toggleFlip('x'));
