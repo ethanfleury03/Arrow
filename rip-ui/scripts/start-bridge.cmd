@@ -18,6 +18,10 @@ if not defined RIP_BRIDGE_HOST set "RIP_BRIDGE_HOST=127.0.0.1"
 if not defined RIP_BRIDGE_PORT set "RIP_BRIDGE_PORT=8787"
 
 if not defined MEMJET_GBORCAT_BIN (
+  if exist "%CD%\runtime\bin\gborcat.exe" (
+    set "MEMJET_GBORCAT_BIN=%CD%\runtime\bin\gborcat.exe"
+    goto :gbor_done
+  )
   for /f "delims=" %%I in ('where gborcat.exe 2^>nul') do (
     set "MEMJET_GBORCAT_BIN=%%I"
     goto :gbor_done

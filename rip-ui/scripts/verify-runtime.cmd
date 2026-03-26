@@ -28,12 +28,16 @@ if defined MEMJET_GBORCAT_BIN (
     set "OK=0"
   )
 ) else (
+  if exist "%CD%\runtime\bin\gborcat.exe" (
+    set "MEMJET_GBORCAT_BIN=%CD%\runtime\bin\gborcat.exe"
+    goto :gbor_found
+  )
   for /f "delims=" %%I in ('where gborcat.exe 2^>nul') do (
     set "MEMJET_GBORCAT_BIN=%%I"
     goto :gbor_found
   )
-  echo [ERROR] gborcat.exe not found in PATH and MEMJET_GBORCAT_BIN is not set.
-  echo         Example: set MEMJET_GBORCAT_BIN=C:\Navigator\Navigator\Workspace\memjet_print_alignment_script\gborcat.exe
+  echo [ERROR] gborcat.exe not found at runtime\bin or PATH and MEMJET_GBORCAT_BIN is not set.
+  echo         Example: set MEMJET_GBORCAT_BIN=C:\Arrow\rip-ui\runtime\bin\gborcat.exe
   set "OK=0"
   goto :after_gbor
 )
