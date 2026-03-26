@@ -74,7 +74,8 @@ const INITIAL_STATE = {
     faults: [],
     lastUpdate: null,
     source: 'bridge-http',
-    running: false
+    running: false,
+    inkLevels: { C: 0, M: 0, Y: 0, K: 0 }
   },
   artwork: {
     loaded: false,
@@ -1262,6 +1263,20 @@ function render() {
     const canonicalState = String(state.liveStatus?.engineState || '').trim().toUpperCase();
     systemStateValueEl.textContent = rawEngineState || canonicalState || 'UNKNOWN';
   }
+
+  const ink = state.liveStatus?.inkLevels || { C: 0, M: 0, Y: 0, K: 0 };
+  ['C', 'M', 'Y', 'K'].forEach(channel => {
+    const pct = Math.max(0, Math.min(100, Number(ink[channel]) || 0));
+    const pctEl = document.getElementById(`inkPercent${channel}`);
+    if (pctEl) {
+      pctEl.textContent = `${pct}%`;
+      pctEl.setAttribute('aria-label', `Ink ${channel} ${pct} percent`);
+    }
+    const barEl = document.getElementById(`inkBar${channel}`);
+    if (barEl) {
+      barEl.style.width = `${pct}%`;
+    }
+  });
 
   const simBadge = document.getElementById('simulationBadge');
   if (simBadge) {
@@ -3587,6 +3602,32 @@ function resolveEngineState(status = {}) {
   };
 }
 
+function parseInkLevelsFromStatus(status = {}) {
+  const details = status?.details || {};
+  const output = String(details?.productInfo?.output || '');
+  if (!output) return { C: 0, M: 0, Y: 0, K: 0 };
+
+  const byColor = {};
+  const tankRegex = /InkTankStatus\(([^)]*)\)/g;
+  let match;
+  while ((match = tankRegex.exec(output)) !== null) {
+    const chunk = match[1] || '';
+    const cap = Number((chunk.match(/inkCapacity\s*=\s*([0-9.]+)/i) || [])[1]);
+    const rem = Number((chunk.match(/inkRemaining\s*=\s*([0-9.]+)/i) || [])[1]);
+    const color = Number((chunk.match(/color\s*=\s*(\d+)/i) || [])[1]);
+    if (!Number.isFinite(cap) || cap <= 0 || !Number.isFinite(rem) || !Number.isInteger(color)) continue;
+    const pct = Math.max(0, Math.min(100, Math.round((rem / cap) * 100)));
+    byColor[color] = pct;
+  }
+
+  return {
+    C: Number.isFinite(byColor[1]) ? byColor[1] : 0,
+    M: Number.isFinite(byColor[2]) ? byColor[2] : 0,
+    Y: Number.isFinite(byColor[3]) ? byColor[3] : 0,
+    K: Number.isFinite(byColor[4]) ? byColor[4] : 0
+  };
+}
+
 function normalizeLiveStatus(rawStatus = {}, fallbackSource = 'bridge-http') {
   const status = rawStatus || {};
   const details = status?.details || {};
@@ -3599,6 +3640,7 @@ function normalizeLiveStatus(rawStatus = {}, fallbackSource = 'bridge-http') {
     engineStateCanonical: resolved.canonical,
     queueLength: Number(status?.queueLength ?? details?.queueLength ?? 0),
     faults: Array.isArray(status?.faults) ? status.faults : [],
+    inkLevels: parseInkLevelsFromStatus(status),
     timestamp: status?.timestamp || status?.lastUpdate || new Date().toISOString(),
     source: status?.source || fallbackSource,
     _engineStateDebug: resolved
@@ -3618,6 +3660,7 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
   state.liveStatus.engineStateCanonical = mapped.engineStateCanonical;
   state.liveStatus.queueLength = mapped.queueLength;
   state.liveStatus.faults = mapped.faults;
+  state.liveStatus.inkLevels = mapped.inkLevels || { C: 0, M: 0, Y: 0, K: 0 };
   state.liveStatus.lastUpdate = mapped.timestamp;
   state.liveStatus.source = mapped.source;
   state.liveStatus.streamConnected = true;
@@ -3646,6 +3689,7 @@ function markStatusStreamStale(reason = 'Status stream stale') {
   state.liveStatus.streamConnected = false;
   state.liveStatus.source = 'bridge-down';
   state.liveStatus.faults = [`STATUS_STALE: ${reason}`];
+  state.liveStatus.inkLevels = { C: 0, M: 0, Y: 0, K: 0 };
   state.liveStatus.lastUpdate = new Date().toISOString();
   render();
 }
@@ -3695,6 +3739,7 @@ function startStatusPolling() {
       state.liveStatus.source = 'bridge-down';
       state.liveStatus.streamConnected = false;
       state.liveStatus.faults = [`STATUS_ERR: ${actionable}`];
+      state.liveStatus.inkLevels = { C: 0, M: 0, Y: 0, K: 0 };
       state.liveStatus.lastUpdate = new Date().toISOString();
       log(`Status polling error: ${actionable}`);
       render();
