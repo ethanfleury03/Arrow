@@ -657,6 +657,14 @@ function createRipBackend({ mode = process.env.RIP_BACKEND_MODE || 'bridge-http'
         engineStateRawLabel: String(status?.engineStateRawLabel || '').trim() || 'UNKNOWN',
         engineStateCanonical: String(status?.engineStateCanonical || '').trim() || null,
         queueLength: Number(status?.queueLength || 0),
+        inkLevels: status?.inkLevels && typeof status.inkLevels === 'object'
+          ? {
+              C: Math.max(0, Math.min(100, Number(status.inkLevels.C) || 0)),
+              M: Math.max(0, Math.min(100, Number(status.inkLevels.M) || 0)),
+              Y: Math.max(0, Math.min(100, Number(status.inkLevels.Y) || 0)),
+              K: Math.max(0, Math.min(100, Number(status.inkLevels.K) || 0))
+            }
+          : null,
         faults: Array.isArray(status?.faults) ? status.faults : [],
         timestamp: status?.timestamp || nowIso(),
         source: `electron-${adapter.name}`
