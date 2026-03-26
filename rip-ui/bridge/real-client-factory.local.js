@@ -201,7 +201,10 @@ function isPrintedButTerminalAckTimedOut(stdout = '', stderr = '') {
     || /start_print_postcheck[\s\S]*"result":"OK"/.test(combined);
   const hadTerminalTimeout = /TERMINAL_PRINT_ACK_TIMEOUT/.test(combined)
     || /Timed out waiting for terminal print completion state/i.test(combined)
-    || /WAIT_TERMINAL_STATE/.test(combined);
+    || /WAIT_TERMINAL_STATE/.test(combined)
+    || /SESSION_COMPLETE_TIMEOUT/.test(combined)
+    || /wait_session_complete_after_start_timeout/.test(combined)
+    || /active_seen=true,\s*last=PRE_JOB/.test(combined);
 
   return hadDataSubmit && hadStart && hadTerminalTimeout;
 }
@@ -231,32 +234,56 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, lo
     });
   }
 
+  const forceCopyLoop = String(process.env.MEMJET_FORCE_COPY_LOOP || '1').trim() !== '0';
+  const perRunCopies = (forceCopyLoop && plan.copies > 1) ? 1 : plan.copies;
+  const runs = (forceCopyLoop && plan.copies > 1) ? plan.copies : 1;
+  const loopGapMs = Number(process.env.MEMJET_COPY_LOOP_GAP_MS || 1500);
+
+  let lastStdout = '';
+  let lastStderr = '';
+
   try {
-    const { stdout, stderr } = await execFileAsync(plan.tool, plan.args, {
-      cwd: plan.ripCoreRoot,
-      timeout: Number(process.env.MEMJET_SUBMIT_TIMEOUT_MS || 180000),
-      maxBuffer: 8 * 1024 * 1024,
-      env: {
-        ...process.env,
-        TEMP: plan.tempDir,
-        TMP: plan.tempDir,
-        JSL_CONFIG_PATH: plan.jslConfigPath,
-        JSL_NUM_COPIES: String(plan.copies)
+    for (let i = 0; i < runs; i += 1) {
+      if (logger?.info && runs > 1) {
+        logger.info({ msg: 'memjet.submitJobData.copy_loop', run: i + 1, runs, requestedCopies: plan.copies });
       }
-    });
+
+      const { stdout, stderr } = await execFileAsync(plan.tool, plan.args, {
+        cwd: plan.ripCoreRoot,
+        timeout: Number(process.env.MEMJET_SUBMIT_TIMEOUT_MS || 180000),
+        maxBuffer: 8 * 1024 * 1024,
+        env: {
+          ...process.env,
+          TEMP: plan.tempDir,
+          TMP: plan.tempDir,
+          JSL_CONFIG_PATH: plan.jslConfigPath,
+          JSL_NUM_COPIES: String(perRunCopies)
+        }
+      });
+
+      lastStdout = String(stdout || '').trim();
+      lastStderr = String(stderr || '').trim();
+
+      if (runs > 1 && i < runs - 1 && loopGapMs > 0) {
+        await new Promise(r => setTimeout(r, loopGapMs));
+      }
+    }
 
     return {
       ok: true,
       method: 'submitJobData',
       fallback: 'memjet-rip',
+      lifecycleHandled: true,
       submissionTool: plan.tool,
       submissionArgs: plan.args,
       requestedJobId,
       effectiveJobId: normalizedJobId,
       normalizedJobId: normalizedFlag,
+      copiesRequested: plan.copies,
+      copiesExecutionMode: runs > 1 ? 'loop' : 'single',
       artifactPath,
-      stdout: String(stdout || '').trim().slice(0, 4000),
-      stderr: String(stderr || '').trim().slice(0, 4000)
+      stdout: lastStdout.slice(0, 4000),
+      stderr: lastStderr.slice(0, 4000)
     };
   } catch (memjetErr) {
     const stderr = String(memjetErr?.stderr || '').trim();
@@ -280,6 +307,7 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, lo
         degraded: true,
         degradedReason: 'terminal_print_ack_timeout_after_submit_start_ok',
         method: 'submitJobData',
+        lifecycleHandled: true,
         fallback: 'memjet-rip',
         submissionTool: plan.tool,
         submissionArgs: plan.args,

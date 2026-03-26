@@ -179,14 +179,24 @@ class JobManager {
       }
       this.transition(job, JOB_STATES.PREPARING);
       this.emit('job.send.step', { jobId: job.jobId, runId: job.runId, step: 'submitJobData' });
-      await this.adapter.submitJobData({ jobId: job.jobId, copies: job.copies, artifactPath: job.artifactPath });
-      this.emit('job.send.step', { jobId: job.jobId, runId: job.runId, step: 'prepareToPrint' });
-      await this.adapter.prepareToPrint({ jobId: job.jobId, copies: job.copies });
-      this.transition(job, JOB_STATES.PRINTING);
-      this.emit('job.send.step', { jobId: job.jobId, runId: job.runId, step: 'startPrinting' });
-      await this.adapter.startPrinting({ jobId: job.jobId, copies: job.copies });
-      this.emit('job.send.step', { jobId: job.jobId, runId: job.runId, step: 'finishPrinting' });
-      await this.adapter.finishPrinting({ jobId: job.jobId });
+      const submitResult = await this.adapter.submitJobData({ jobId: job.jobId, copies: job.copies, artifactPath: job.artifactPath });
+
+      if (submitResult?.lifecycleHandled) {
+        this.emit('job.send.step', {
+          jobId: job.jobId,
+          runId: job.runId,
+          step: 'lifecycleHandledBySubmit',
+          mode: submitResult?.copiesExecutionMode || 'single'
+        });
+      } else {
+        this.emit('job.send.step', { jobId: job.jobId, runId: job.runId, step: 'prepareToPrint' });
+        await this.adapter.prepareToPrint({ jobId: job.jobId, copies: job.copies });
+        this.transition(job, JOB_STATES.PRINTING);
+        this.emit('job.send.step', { jobId: job.jobId, runId: job.runId, step: 'startPrinting' });
+        await this.adapter.startPrinting({ jobId: job.jobId, copies: job.copies });
+        this.emit('job.send.step', { jobId: job.jobId, runId: job.runId, step: 'finishPrinting' });
+        await this.adapter.finishPrinting({ jobId: job.jobId });
+      }
       this.transition(job, JOB_STATES.COMPLETED);
       this.queue = this.queue.filter(id => id !== job.jobId);
       return job;
