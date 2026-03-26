@@ -76,7 +76,14 @@ const INITIAL_STATE = {
     source: 'bridge-http',
     running: false,
     inkLevels: { C: 0, M: 0, Y: 0, K: 0 },
-    inkSource: 'none'
+    inkSource: 'none',
+    capabilities: {
+      movePrintheads: {
+        supported: true,
+        reason: null,
+        positions: ['capped', 'raised', 'print']
+      }
+    }
   },
   artwork: {
     loaded: false,
@@ -3650,6 +3657,7 @@ function normalizeLiveStatus(rawStatus = {}, fallbackSource = 'bridge-http') {
   const inkSource = status?.inkLevels
     ? 'status.inkLevels'
     : (String(details?.productInfo?.output || '').includes('InkTankStatus(') ? 'details.productInfo.output' : 'none');
+  const fallbackMoveHeadOp = details?.diagnostics?.operations?.startMovingPrintheads || {};
 
   return {
     engineState: resolved.engineState,
@@ -3660,6 +3668,13 @@ function normalizeLiveStatus(rawStatus = {}, fallbackSource = 'bridge-http') {
     faults: Array.isArray(status?.faults) ? status.faults : [],
     inkLevels: parsedInk,
     inkSource,
+    capabilities: status?.capabilities || {
+      movePrintheads: {
+        supported: Boolean(fallbackMoveHeadOp?.allowed ?? true),
+        reason: fallbackMoveHeadOp?.reason || null,
+        positions: ['capped', 'raised', 'print']
+      }
+    },
     timestamp: status?.timestamp || status?.lastUpdate || new Date().toISOString(),
     source: status?.source || fallbackSource,
     _engineStateDebug: resolved
@@ -3685,6 +3700,7 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
     state.liveStatus.inkLevels = { C: 0, M: 0, Y: 0, K: 0 };
   }
   state.liveStatus.inkSource = mapped.inkSource || 'none';
+  state.liveStatus.capabilities = mapped.capabilities || state.liveStatus.capabilities;
   state.liveStatus.lastUpdate = mapped.timestamp;
   state.liveStatus.source = mapped.source;
   state.liveStatus.streamConnected = true;
@@ -3861,6 +3877,17 @@ function computeEligibility(command) {
       message: 'Status polling is not running; commands can proceed with reduced live telemetry.',
       remediation: 'Start status polling to improve safety visibility before mutating operations.'
     });
+  }
+
+  if (['head_cap', 'head_raise', 'head_print'].includes(normalizedCommand)) {
+    const moveHeadCaps = state.liveStatus?.capabilities?.movePrintheads || {};
+    if (moveHeadCaps.supported === false) {
+      checks.push({
+        level: 'block',
+        message: 'Printhead controls are not supported by the current backend runtime.',
+        remediation: moveHeadCaps.reason || 'Update remote pesctl/memjet runtime to support startMovingPrintheads.'
+      });
+    }
   }
 
   if (normalizedCommand === 'print_prepare' && state.jobs.every(j => j.status !== 'queued')) {

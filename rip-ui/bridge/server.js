@@ -48,6 +48,33 @@ const COMMAND_LOG_META = {
   head_print: { memjetMethod: 'startMovingPrintheads', args: [{ printUnits: DEFAULT_PRINT_UNITS, position: 'print' }] }
 };
 
+function classifyCommandRuntimeError(error, command) {
+  const msg = String(error?.message || 'unknown_error');
+  const lower = msg.toLowerCase();
+  const isHeadCommand = String(command || '').startsWith('head_');
+
+  if (isHeadCommand && lower.includes('importerror') && lower.includes('printheadposition')) {
+    return {
+      status: 409,
+      payload: {
+        accepted: false,
+        error: 'runtime_mismatch',
+        command,
+        message: 'Printhead controls unavailable: remote PES runtime is missing PrintheadPosition enum compatibility.',
+        remediation: 'Update remote pesctl/memjet bridge runtime to a version that supports startMovingPrintheads position enums (capped/raised/print).',
+        source: 'bridge-http',
+        timestamp: new Date().toISOString(),
+        details: {
+          code: 'PRINTHEAD_RUNTIME_MISMATCH',
+          rawError: msg.slice(0, 4000)
+        }
+      }
+    };
+  }
+
+  return null;
+}
+
 function hasSimulatedSignal(value, depth = 0) {
   if (depth > 4 || value == null) return false;
 
@@ -443,6 +470,8 @@ function createBridgeServer(options = {}) {
         const raw = latestRawDeviceStatus || {};
         const snapshot = latestSystemState || {};
 
+        const moveHeadOp = raw?.details?.diagnostics?.operations?.startMovingPrintheads || {};
+
         return json(res, 200, {
           ...raw,
           engineState: snapshot.engineState || raw.engineState || 'UNKNOWN',
@@ -455,6 +484,13 @@ function createBridgeServer(options = {}) {
           inkLevels: snapshot.inkLevels || extractInkLevels(raw),
           connected: Boolean(snapshot.connected ?? raw.connected),
           degraded: Boolean(snapshot.degraded ?? raw.degraded),
+          capabilities: {
+            movePrintheads: {
+              supported: Boolean(moveHeadOp?.allowed),
+              reason: moveHeadOp?.reason || null,
+              positions: ['capped', 'raised', 'print']
+            }
+          },
           source: 'bridge-http',
           lastUpdate: snapshot.timestamp || raw.lastUpdate || new Date().toISOString()
         });
@@ -480,7 +516,17 @@ function createBridgeServer(options = {}) {
           args: commandMeta?.args || []
         });
 
-        const result = await handler(adapter);
+        let result;
+        try {
+          result = await handler(adapter);
+        } catch (error) {
+          const classified = classifyCommandRuntimeError(error, command);
+          if (classified) {
+            logger.error({ msg: 'bridge.command.runtime_mismatch', command, err: error?.message || String(error) });
+            return json(res, classified.status, classified.payload);
+          }
+          throw error;
+        }
 
         if (command.startsWith('head_') && hasSimulatedSignal(result)) {
           logger.error({ msg: 'bridge.command.rejected_simulated', command, result });
