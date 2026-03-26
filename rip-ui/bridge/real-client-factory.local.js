@@ -153,6 +153,73 @@ function buildGborcatCommand({ host, dataPort, jobId, artifactPath }) {
   return { tool, args };
 }
 
+function getSubmitMode() {
+  return String(process.env.MEMJET_SUBMIT_MODE || '').trim().toLowerCase();
+}
+
+function buildMemjetRipCommand({ artifactPath, host, dataPort }) {
+  const configured = process.env.MEMJET_RIP_BIN || process.env.MEMJET_SUBMITTER_BIN || process.env.RIP_MEMJET_RIP_BIN;
+  const defaultWinBin = path.resolve(process.cwd(), '..', 'rip-core', 'src', 'build', 'Release', 'memjet-rip.exe');
+  const tool = configured || ((process.platform === 'win32' && fs.existsSync(defaultWinBin)) ? defaultWinBin : 'memjet-rip.exe');
+  const tempDir = process.env.MEMJET_RIP_TEMP_DIR || process.env.MEMJET_SUBMIT_TEMP_DIR || 'C:\\ArrowRip\\temp';
+  const args = [String(artifactPath), '--pes-ip', String(host), '--pes-port', String(Number(dataPort) || 13001), '-v'];
+  return { tool, args, tempDir };
+}
+
+async function runMemjetRipSubmit({ artifactPath, host, dataPort, logger, requestedJobId = null, normalizedJobId = null, normalizedFlag = false }) {
+  const plan = buildMemjetRipCommand({ artifactPath, host, dataPort });
+
+  if (process.platform === 'win32') {
+    try {
+      fs.mkdirSync(plan.tempDir, { recursive: true });
+    } catch {
+      // ignore; exec will surface errors if path is not usable
+    }
+  }
+
+  if (logger?.warn) {
+    logger.warn({
+      msg: 'memjet.submitJobData.memjet_rip',
+      tool: plan.tool,
+      args: plan.args,
+      tempDir: plan.tempDir,
+      host,
+      dataPort
+    });
+  }
+
+  try {
+    const { stdout, stderr } = await execFileAsync(plan.tool, plan.args, {
+      timeout: Number(process.env.MEMJET_SUBMIT_TIMEOUT_MS || 180000),
+      maxBuffer: 8 * 1024 * 1024,
+      env: {
+        ...process.env,
+        TEMP: plan.tempDir,
+        TMP: plan.tempDir
+      }
+    });
+
+    return {
+      ok: true,
+      method: 'submitJobData',
+      fallback: 'memjet-rip',
+      submissionTool: plan.tool,
+      submissionArgs: plan.args,
+      requestedJobId,
+      effectiveJobId: normalizedJobId,
+      normalizedJobId: normalizedFlag,
+      artifactPath,
+      stdout: String(stdout || '').trim().slice(0, 4000),
+      stderr: String(stderr || '').trim().slice(0, 4000)
+    };
+  } catch (memjetErr) {
+    const stderr = String(memjetErr?.stderr || '').trim();
+    const stdout = String(memjetErr?.stdout || '').trim();
+    const code = memjetErr?.code ?? memjetErr?.signal ?? 'unknown';
+    throw new Error(`submitJobData memjet-rip failed (${code}). stdout=${stdout || 'n/a'} stderr=${stderr || 'n/a'}`);
+  }
+}
+
 function requiredEnv(name, value) {
   return String(value || '').trim() ? null : name;
 }
@@ -567,6 +634,19 @@ async function createLocalClient({ host, commandPort, dataPort, protocol, transp
       }
 
       const normalized = normalizeJobId(jobId);
+      const submitMode = getSubmitMode();
+      if (submitMode === 'memjet-rip') {
+        return runMemjetRipSubmit({
+          artifactPath: resolvedArtifact,
+          host,
+          dataPort,
+          logger,
+          requestedJobId: jobId || null,
+          normalizedJobId: normalized.jobId,
+          normalizedFlag: normalized.normalized
+        });
+      }
+
       const plan = buildGborcatCommand({
         host,
         dataPort,
@@ -680,6 +760,19 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
       }
 
       const normalized = normalizeJobId(jobId);
+      const submitMode = getSubmitMode();
+      if (submitMode === 'memjet-rip') {
+        return runMemjetRipSubmit({
+          artifactPath: resolvedArtifact,
+          host,
+          dataPort,
+          logger,
+          requestedJobId: jobId || null,
+          normalizedJobId: normalized.jobId,
+          normalizedFlag: normalized.normalized
+        });
+      }
+
       try {
         return await call('submitJobData', {
           jobId: normalized.jobId,
@@ -694,6 +787,18 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
         const allowFallback = String(process.env.MEMJET_SSH_SUBMIT_FALLBACK_LOCAL_GBORCAT || '1').trim() !== '0';
         if (!allowFallback || !/unsupported_op/i.test(msg) || !/submitJobData/i.test(msg)) {
           throw error;
+        }
+
+        if (String(process.env.MEMJET_SSH_SUBMIT_FALLBACK_MEMJET_RIP || '1').trim() !== '0') {
+          return runMemjetRipSubmit({
+            artifactPath: resolvedArtifact,
+            host,
+            dataPort,
+            logger,
+            requestedJobId: jobId || null,
+            normalizedJobId: normalized.jobId,
+            normalizedFlag: normalized.normalized
+          });
         }
 
         const plan = buildGborcatCommand({
