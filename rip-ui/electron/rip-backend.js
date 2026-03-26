@@ -460,8 +460,10 @@ class BridgeHttpAdapter {
         engineStateRawNumeric: resolvedState.numeric,
         engineStateRawLabel: resolvedState.rawLabel,
         engineStateCanonical: resolvedState.canonical,
-        queueLength: Number(status?.details?.queueLength || 0),
+        queueLength: Number(status?.queueLength ?? status?.details?.queueLength ?? 0),
         faults: [],
+        inkLevels: status?.inkLevels || null,
+        details: status?.details || null,
         timestamp: status?.lastUpdate || nowIso()
       };
     } catch (_bridgeError) {
