@@ -597,6 +597,40 @@ class BridgeUnavailableAdapter {
   }
 }
 
+function parseInkLevelsFromStatusPayload(status = {}) {
+  if (status?.inkLevels && typeof status.inkLevels === 'object') {
+    return {
+      C: Math.max(0, Math.min(100, Number(status.inkLevels.C) || 0)),
+      M: Math.max(0, Math.min(100, Number(status.inkLevels.M) || 0)),
+      Y: Math.max(0, Math.min(100, Number(status.inkLevels.Y) || 0)),
+      K: Math.max(0, Math.min(100, Number(status.inkLevels.K) || 0))
+    };
+  }
+
+  const output = String(status?.details?.productInfo?.output || '');
+  if (!output) return null;
+
+  const byColor = {};
+  const tankRegex = /InkTankStatus\(([^)]*)\)/g;
+  let match;
+  while ((match = tankRegex.exec(output)) !== null) {
+    const chunk = match[1] || '';
+    const cap = Number((/inkCapacity\s*=\s*([0-9.]+)/i.exec(chunk) || [])[1]);
+    const rem = Number((/inkRemaining\s*=\s*([0-9.]+)/i.exec(chunk) || [])[1]);
+    const color = Number((/color\s*=\s*(\d+)/i.exec(chunk) || [])[1]);
+    if (!Number.isFinite(cap) || cap <= 0 || !Number.isFinite(rem) || !Number.isInteger(color)) continue;
+    byColor[color] = Math.max(0, Math.min(100, Math.round((rem / cap) * 100)));
+  }
+
+  if (!Object.keys(byColor).length) return null;
+  return {
+    C: Number.isFinite(byColor[1]) ? byColor[1] : 0,
+    M: Number.isFinite(byColor[2]) ? byColor[2] : 0,
+    Y: Number.isFinite(byColor[3]) ? byColor[3] : 0,
+    K: Number.isFinite(byColor[4]) ? byColor[4] : 0
+  };
+}
+
 function createAdapter({ mode, logger, runtimeConfig }) {
   if (mode === 'bridge-http') {
     return new BridgeHttpAdapter({ runtimeConfig, logger, timeoutMs: Number(process.env.RIP_BRIDGE_TIMEOUT_MS || 5000) });
@@ -657,14 +691,7 @@ function createRipBackend({ mode = process.env.RIP_BACKEND_MODE || 'bridge-http'
         engineStateRawLabel: String(status?.engineStateRawLabel || '').trim() || 'UNKNOWN',
         engineStateCanonical: String(status?.engineStateCanonical || '').trim() || null,
         queueLength: Number(status?.queueLength || 0),
-        inkLevels: status?.inkLevels && typeof status.inkLevels === 'object'
-          ? {
-              C: Math.max(0, Math.min(100, Number(status.inkLevels.C) || 0)),
-              M: Math.max(0, Math.min(100, Number(status.inkLevels.M) || 0)),
-              Y: Math.max(0, Math.min(100, Number(status.inkLevels.Y) || 0)),
-              K: Math.max(0, Math.min(100, Number(status.inkLevels.K) || 0))
-            }
-          : null,
+        inkLevels: parseInkLevelsFromStatusPayload(status),
         faults: Array.isArray(status?.faults) ? status.faults : [],
         timestamp: status?.timestamp || nowIso(),
         source: `electron-${adapter.name}`
