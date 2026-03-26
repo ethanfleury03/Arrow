@@ -161,8 +161,12 @@ function escapeSingleQuotes(value) {
 function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const env = process.env;
   const backend = String(env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
-  const sshHost = String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || '192.168.100.200').trim();
-  const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || 'root').trim();
+
+  // Hardcoded production target (requested): this endpoint/user/pass is treated as stable.
+  const sshHost = '192.168.100.200';
+  const sshUser = 'root';
+  const sshPassword = 'root';
+
   const defaultUserKey = env.USERPROFILE ? `${env.USERPROFILE}\\.ssh\\id_ed25519` : '';
   const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || defaultUserKey).trim();
   const sshPort = Number(env.MEMJET_SSH_PORT || env.RIP_SSH_PORT || 22);
@@ -170,7 +174,7 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const sshTimeoutMs = Number(env.MEMJET_SSH_TIMEOUT_MS || 30000);
   const cmdTemplate = String(
     env.MEMJET_SSH_REMOTE_CMD_TEMPLATE
-      || '/usr/local/bin/pesctl --op {operation} --args-b64 {args_json_b64} --host {host} --command-port {commandPort} --event-port {eventPort} --data-port {dataPort}'
+      || '/opt/arrow/bin/memjet-bridge-op --op {operation} --args-b64 {args_json_b64} --host {host} --command-port {commandPort} --event-port {eventPort} --data-port {dataPort}'
   ).trim();
 
   const missing = [];
@@ -186,6 +190,7 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
     backend,
     sshHost,
     sshUser,
+    sshPassword,
     sshKeyPath,
     sshPort,
     sshBin,
@@ -225,9 +230,9 @@ async function runSshOperation({ settings, operation, payload, logger }) {
   }
 
   const sshArgs = [
-    '-o', 'BatchMode=yes',
+    '-o', 'BatchMode=no',
     '-o', 'StrictHostKeyChecking=accept-new',
-    '-o', 'PreferredAuthentications=publickey',
+    '-o', 'PreferredAuthentications=password,keyboard-interactive,publickey',
     '-p', String(settings.sshPort),
     ...(settings.sshKeyPath ? ['-i', settings.sshKeyPath] : []),
     `${settings.sshUser}@${settings.sshHost}`,
@@ -249,10 +254,33 @@ async function runSshOperation({ settings, operation, payload, logger }) {
   let stdout = '';
   let stderr = '';
   try {
-    const run = await execFileAsync(settings.sshBin, sshArgs, {
-      timeout: settings.sshTimeoutMs,
-      maxBuffer: 8 * 1024 * 1024
-    });
+    let run;
+    if (process.platform === 'win32' && settings.sshPassword) {
+      try {
+        run = await execFileAsync('plink', [
+          '-batch',
+          '-P', String(settings.sshPort),
+          '-l', settings.sshUser,
+          '-pw', settings.sshPassword,
+          settings.sshHost,
+          remoteCommand
+        ], {
+          timeout: settings.sshTimeoutMs,
+          maxBuffer: 8 * 1024 * 1024
+        });
+      } catch (plinkErr) {
+        run = await execFileAsync(settings.sshBin, sshArgs, {
+          timeout: settings.sshTimeoutMs,
+          maxBuffer: 8 * 1024 * 1024
+        });
+      }
+    } else {
+      run = await execFileAsync(settings.sshBin, sshArgs, {
+        timeout: settings.sshTimeoutMs,
+        maxBuffer: 8 * 1024 * 1024
+      });
+    }
+
     stdout = String(run.stdout || '').trim();
     stderr = String(run.stderr || '').trim();
   } catch (error) {
