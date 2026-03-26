@@ -240,7 +240,9 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, lo
   const perRunCopies = (forceCopyLoop && plan.copies > 1) ? 1 : plan.copies;
   const runs = (forceCopyLoop && plan.copies > 1) ? plan.copies : 1;
   const loopGapMs = Number(process.env.MEMJET_COPY_LOOP_GAP_MS || 1500);
-  const degradedGapMs = Number(process.env.MEMJET_COPY_LOOP_DEGRADED_GAP_MS || 45000);
+  // Keep degraded gaps short by default so multi-copy jobs continue promptly.
+  // Can still be overridden via env when needed.
+  const degradedGapMs = Number(process.env.MEMJET_COPY_LOOP_DEGRADED_GAP_MS || 5000);
 
   let lastStdout = '';
   let lastStderr = '';
@@ -299,6 +301,15 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, lo
     if (runs > 1 && i < runs - 1) {
       const gapMs = degradedThisRun ? degradedGapMs : loopGapMs;
       if (gapMs > 0) {
+        if (logger?.info) {
+          logger.info({
+            msg: 'memjet.submitJobData.copy_loop.wait',
+            nextRun: i + 2,
+            runs,
+            gapMs,
+            reason: degradedThisRun ? 'degraded_success_backoff' : 'normal_inter_copy_gap'
+          });
+        }
         await new Promise(r => setTimeout(r, gapMs));
       }
     }
