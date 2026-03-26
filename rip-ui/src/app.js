@@ -1014,8 +1014,10 @@ function refreshQueueDepth() {
 
 async function dispatchQueuedJob(nextJob, source = 'auto-send') {
   const bridge = getBridge();
-  if (!bridge || typeof bridge.submitJob !== 'function') {
-    const msg = 'NOT-CONFIGURED: submitJob bridge hook unavailable.';
+  const hasQueuedSender = Boolean(bridge && typeof bridge.sendQueuedJob === 'function');
+  const hasLegacySubmit = Boolean(bridge && typeof bridge.submitJob === 'function');
+  if (!bridge || (!hasQueuedSender && !hasLegacySubmit)) {
+    const msg = 'NOT-CONFIGURED: sendQueuedJob/submitJob bridge hook unavailable.';
     state.submission.lastResult = `ERROR: ${msg}`;
     nextJob.status = 'failed';
     nextJob.error = msg;
@@ -1043,18 +1045,21 @@ async function dispatchQueuedJob(nextJob, source = 'auto-send') {
 
   try {
     const copies = Math.max(1, Math.floor(Number(nextJob.copies || 1)));
-    const result = await bridge.submitJob({
-      jobId: nextJob.id,
-      fileName: nextJob.name || state.artwork.name || null,
-      inputPath: nextJob.inputPath,
-      copies,
-      args: copies > 1 ? ['--copies', String(copies)] : [],
-      config: state.config,
-      settings: {
-        ...deepClone(state.artwork.placement),
-        inputPath: nextJob.inputPath
-      }
-    });
+    const canSendQueued = typeof bridge.sendQueuedJob === 'function';
+    const result = canSendQueued
+      ? await bridge.sendQueuedJob({ bridgeJobId: nextJob.bridgeJobId || nextJob.id, copies })
+      : await bridge.submitJob({
+        jobId: nextJob.id,
+        fileName: nextJob.name || state.artwork.name || null,
+        inputPath: nextJob.inputPath,
+        copies,
+        args: copies > 1 ? ['--copies', String(copies)] : [],
+        config: state.config,
+        settings: {
+          ...deepClone(state.artwork.placement),
+          inputPath: nextJob.inputPath
+        }
+      });
 
     nextJob.bridgeJobId = result?.jobId || null;
     const resultStatus = String(result?.status || 'completed').toLowerCase();
@@ -1473,26 +1478,60 @@ async function handleSendJobCopies(copyCount) {
     return;
   }
 
+  const bridge = getBridge();
+  if (!bridge || typeof bridge.ingestJob !== 'function') {
+    const msg = 'NOT-CONFIGURED: ingestJob bridge hook unavailable.';
+    state.submission.lastResult = `ERROR: ${msg}`;
+    log(`Send Job aborted: ${msg}`);
+    await appendAudit({ type: 'send-job', copies, outcome: 'bridge-unavailable', error: msg });
+    render();
+    persistState();
+    return;
+  }
+
   const localJobId = generateJobId();
-  state.jobs.push({
-    id: localJobId,
-    name: state.artwork.name || `job_${localJobId}.pdf`,
-    status: 'queued',
-    copies,
+  const payload = {
+    jobId: localJobId,
+    fileName: state.artwork.name || `job_${localJobId}.pdf`,
     inputPath: state.artwork.inputPath,
-    createdAt: new Date().toISOString()
-  });
+    copies,
+    config: state.config,
+    settings: {
+      ...deepClone(state.artwork.placement),
+      inputPath: state.artwork.inputPath
+    }
+  };
 
-  state.submission.lastJobId = localJobId;
-  state.submission.lastResult = `QUEUED: ${localJobId} (${copies} copies)`;
-  state.queue.push(`queued(${localJobId}, copies=${copies})`);
-  refreshQueueDepth();
-  log(`Queued ${localJobId} (${copies} copies).`);
+  try {
+    const ingest = await bridge.ingestJob(payload);
+    const bridgeJobId = ingest?.jobId || localJobId;
 
-  await appendAudit({ type: 'send-job', copies, outcome: 'queued', jobId: localJobId });
+    state.jobs.push({
+      id: localJobId,
+      bridgeJobId,
+      name: state.artwork.name || `job_${localJobId}.pdf`,
+      status: 'queued',
+      copies,
+      inputPath: state.artwork.inputPath,
+      createdAt: new Date().toISOString()
+    });
 
-  if (state.controls?.autoSendEnabled) {
-    tryAutoDispatchNextJob('queue-on-submit');
+    state.submission.lastJobId = localJobId;
+    state.submission.lastResult = `QUEUED: ${localJobId} (${copies} copies)`;
+    state.queue.push(`queued(${localJobId}, bridge=${bridgeJobId}, copies=${copies})`);
+    refreshQueueDepth();
+    log(`Queued ${localJobId} (${copies} copies) as bridge job ${bridgeJobId}.`);
+
+    await appendAudit({ type: 'send-job', copies, outcome: 'queued', jobId: localJobId, bridgeJobId });
+
+    if (state.controls?.autoSendEnabled) {
+      tryAutoDispatchNextJob('queue-on-submit');
+    }
+  } catch (error) {
+    const msg = getActionableError(error);
+    state.submission.lastResult = `ERROR: ${msg}`;
+    log(`Send Job aborted: ${msg}`);
+    await appendAudit({ type: 'send-job', copies, outcome: 'ingest-error', error: msg, jobId: localJobId });
   }
 
   render();
