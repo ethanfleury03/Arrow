@@ -794,6 +794,64 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
 
   const call = async (operation, payload = {}) => runSshOperation({ settings, operation, payload, logger });
 
+  let submitChain = Promise.resolve();
+  let lastSubmitFinishedAt = 0;
+
+  const extractStatusSnapshot = (statusResult = {}) => {
+    const output = String(statusResult?.output || '');
+    const raw = /"raw"\s*:\s*"([\s\S]*?)"\s*,\s*"queueLen"/m.exec(output)?.[1] || output;
+    const queueLenFromJson = Number(statusResult?.queueLen);
+    const queueLenFromRaw = Number((/queueLen"\s*:\s*(\d+)/.exec(output) || [])[1]);
+    const queueLen = Number.isFinite(queueLenFromJson)
+      ? queueLenFromJson
+      : (Number.isFinite(queueLenFromRaw) ? queueLenFromRaw : null);
+    const stateCode = Number((/state=(\d+)/.exec(raw) || [])[1]);
+    const readyMatch = /isReadyForPrintData=(true|false)/.exec(raw);
+    const isReadyForPrintData = readyMatch ? readyMatch[1] === 'true' : null;
+    return {
+      queueLen,
+      stateCode: Number.isFinite(stateCode) ? stateCode : null,
+      isReadyForPrintData,
+      raw: raw.slice(0, 1000)
+    };
+  };
+
+  const waitForSubmitWindow = async () => {
+    const minGapMs = Number(process.env.MEMJET_SUBMIT_MIN_GAP_MS || 4000);
+    const maxWaitMs = Number(process.env.MEMJET_SUBMIT_READY_TIMEOUT_MS || 45000);
+    const start = Date.now();
+
+    while (Date.now() - start < maxWaitMs) {
+      const elapsedSinceLast = Date.now() - lastSubmitFinishedAt;
+      if (lastSubmitFinishedAt > 0 && elapsedSinceLast < minGapMs) {
+        await new Promise(r => setTimeout(r, 500));
+        continue;
+      }
+
+      const status = await call('getStatus', {});
+      const snap = extractStatusSnapshot(status);
+      const queueEmpty = snap.queueLen === 0;
+      const stateOk = snap.stateCode == null || [4, 6, 7].includes(snap.stateCode);
+      if (queueEmpty && stateOk) {
+        return;
+      }
+
+      if (logger?.info) {
+        logger.info({
+          msg: 'memjet.submitJobData.wait_for_window',
+          queueLen: snap.queueLen,
+          stateCode: snap.stateCode,
+          isReadyForPrintData: snap.isReadyForPrintData
+        });
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    if (logger?.warn) {
+      logger.warn({ msg: 'memjet.submitJobData.wait_for_window.timeout', timeoutMs: maxWaitMs });
+    }
+  };
+
   return {
     async getStatus() {
       return call('getStatus', {});
@@ -819,45 +877,20 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
     prepareToPrint: async ips => call('prepareToPrint', { intendedSpeedIps: Number(ips) }),
 
     submitJobData: async ({ jobId, artifactPath } = {}) => {
-      const resolvedArtifact = artifactPath ? path.resolve(String(artifactPath)) : null;
-      if (!resolvedArtifact) {
-        throw new Error('submitJobData requires artifactPath');
-      }
-      if (!fs.existsSync(resolvedArtifact) || !fileReadable(resolvedArtifact)) {
-        throw new Error(`submitJobData artifact is missing/unreadable: ${resolvedArtifact}`);
-      }
-
-      const normalized = normalizeJobId(jobId);
-      const submitMode = getSubmitMode();
-      if (submitMode === 'memjet-rip') {
-        return runMemjetRipSubmit({
-          artifactPath: resolvedArtifact,
-          host,
-          dataPort,
-          logger,
-          requestedJobId: jobId || null,
-          normalizedJobId: normalized.jobId,
-          normalizedFlag: normalized.normalized
-        });
-      }
-
-      try {
-        return await call('submitJobData', {
-          jobId: normalized.jobId,
-          requestedJobId: jobId || null,
-          normalizedJobId: normalized.normalized,
-          artifactPath: resolvedArtifact,
-          host: String(host),
-          dataPort: Number(dataPort)
-        });
-      } catch (error) {
-        const msg = String(error?.message || '');
-        const allowFallback = String(process.env.MEMJET_SSH_SUBMIT_FALLBACK_LOCAL_GBORCAT || '1').trim() !== '0';
-        if (!allowFallback || !/unsupported_op/i.test(msg) || !/submitJobData/i.test(msg)) {
-          throw error;
+      const runOnce = async () => {
+        const resolvedArtifact = artifactPath ? path.resolve(String(artifactPath)) : null;
+        if (!resolvedArtifact) {
+          throw new Error('submitJobData requires artifactPath');
+        }
+        if (!fs.existsSync(resolvedArtifact) || !fileReadable(resolvedArtifact)) {
+          throw new Error(`submitJobData artifact is missing/unreadable: ${resolvedArtifact}`);
         }
 
-        if (String(process.env.MEMJET_SSH_SUBMIT_FALLBACK_MEMJET_RIP || '1').trim() !== '0') {
+        await waitForSubmitWindow();
+
+        const normalized = normalizeJobId(jobId);
+        const submitMode = getSubmitMode();
+        if (submitMode === 'memjet-rip') {
           return runMemjetRipSubmit({
             artifactPath: resolvedArtifact,
             host,
@@ -869,50 +902,85 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
           });
         }
 
-        const plan = buildGborcatCommand({
-          host,
-          dataPort,
-          jobId: normalized.jobId,
-          artifactPath: resolvedArtifact
-        });
-
-        if (logger?.warn) {
-          logger.warn({
-            msg: 'memjet.submitJobData.fallback_local_gborcat',
-            reason: 'remote_pesctl_unsupported_op',
-            tool: plan.tool,
-            args: plan.args,
-            host,
-            dataPort
-          });
-        }
-
         try {
-          const { stdout, stderr } = await execFileAsync(plan.tool, plan.args, {
-            timeout: Number(process.env.MEMJET_SUBMIT_TIMEOUT_MS || 30000),
-            maxBuffer: 4 * 1024 * 1024
-          });
-
-          return {
-            ok: true,
-            method: 'submitJobData',
-            fallback: 'local-gborcat',
-            submissionTool: plan.tool,
-            submissionArgs: plan.args,
+          return await call('submitJobData', {
+            jobId: normalized.jobId,
             requestedJobId: jobId || null,
-            effectiveJobId: normalized.jobId,
             normalizedJobId: normalized.normalized,
             artifactPath: resolvedArtifact,
-            stdout: String(stdout || '').trim().slice(0, 4000),
-            stderr: String(stderr || '').trim().slice(0, 4000)
-          };
-        } catch (gborErr) {
-          const stderr = String(gborErr?.stderr || '').trim();
-          const stdout = String(gborErr?.stdout || '').trim();
-          const code = gborErr?.code ?? gborErr?.signal ?? 'unknown';
-          throw new Error(`submitJobData fallback gborcat failed (${code}). stdout=${stdout || 'n/a'} stderr=${stderr || 'n/a'}`);
+            host: String(host),
+            dataPort: Number(dataPort)
+          });
+        } catch (error) {
+          const msg = String(error?.message || '');
+          const allowFallback = String(process.env.MEMJET_SSH_SUBMIT_FALLBACK_LOCAL_GBORCAT || '1').trim() !== '0';
+          if (!allowFallback || !/unsupported_op/i.test(msg) || !/submitJobData/i.test(msg)) {
+            throw error;
+          }
+
+          if (String(process.env.MEMJET_SSH_SUBMIT_FALLBACK_MEMJET_RIP || '1').trim() !== '0') {
+            return runMemjetRipSubmit({
+              artifactPath: resolvedArtifact,
+              host,
+              dataPort,
+              logger,
+              requestedJobId: jobId || null,
+              normalizedJobId: normalized.jobId,
+              normalizedFlag: normalized.normalized
+            });
+          }
+
+          const plan = buildGborcatCommand({
+            host,
+            dataPort,
+            jobId: normalized.jobId,
+            artifactPath: resolvedArtifact
+          });
+
+          if (logger?.warn) {
+            logger.warn({
+              msg: 'memjet.submitJobData.fallback_local_gborcat',
+              reason: 'remote_pesctl_unsupported_op',
+              tool: plan.tool,
+              args: plan.args,
+              host,
+              dataPort
+            });
+          }
+
+          try {
+            const { stdout, stderr } = await execFileAsync(plan.tool, plan.args, {
+              timeout: Number(process.env.MEMJET_SUBMIT_TIMEOUT_MS || 30000),
+              maxBuffer: 4 * 1024 * 1024
+            });
+
+            return {
+              ok: true,
+              method: 'submitJobData',
+              fallback: 'local-gborcat',
+              submissionTool: plan.tool,
+              submissionArgs: plan.args,
+              requestedJobId: jobId || null,
+              effectiveJobId: normalized.jobId,
+              normalizedJobId: normalized.normalized,
+              artifactPath: resolvedArtifact,
+              stdout: String(stdout || '').trim().slice(0, 4000),
+              stderr: String(stderr || '').trim().slice(0, 4000)
+            };
+          } catch (gborErr) {
+            const stderr = String(gborErr?.stderr || '').trim();
+            const stdout = String(gborErr?.stdout || '').trim();
+            const code = gborErr?.code ?? gborErr?.signal ?? 'unknown';
+            throw new Error(`submitJobData fallback gborcat failed (${code}). stdout=${stdout || 'n/a'} stderr=${stderr || 'n/a'}`);
+          }
         }
-      }
+      };
+
+      const chained = submitChain.then(runOnce, runOnce);
+      submitChain = chained.finally(() => {
+        lastSubmitFinishedAt = Date.now();
+      });
+      return submitChain;
     },
 
     startPrinting: async () => call('startPrinting', {}),
