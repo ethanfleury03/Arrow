@@ -455,6 +455,7 @@ class BridgeHttpAdapter {
         });
       }
 
+      const parsedInkLevels = parseInkLevelsFromStatus(status);
       return {
         engineState: resolvedState.engineState,
         engineStateRawNumeric: resolvedState.numeric,
@@ -462,6 +463,8 @@ class BridgeHttpAdapter {
         engineStateCanonical: resolvedState.canonical,
         queueLength: Number(status?.details?.queueLength || 0),
         faults: [],
+        inkLevels: parsedInkLevels,
+        details: status?.details || null,
         timestamp: status?.lastUpdate || nowIso()
       };
     } catch (_bridgeError) {
