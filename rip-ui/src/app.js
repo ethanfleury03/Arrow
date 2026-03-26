@@ -1017,7 +1017,7 @@ async function dispatchQueuedJob(nextJob, source = 'auto-send') {
   if (!bridge || typeof bridge.submitJob !== 'function') {
     const msg = 'NOT-CONFIGURED: submitJob bridge hook unavailable.';
     state.submission.lastResult = `ERROR: ${msg}`;
-    nextJob.status = 'error';
+    nextJob.status = 'failed';
     nextJob.error = msg;
     log(msg);
     await appendAudit({ type: 'send-job', copies: Number(nextJob.copies || 1), outcome: 'bridge-unavailable', error: msg, jobId: nextJob.id });
@@ -1027,7 +1027,7 @@ async function dispatchQueuedJob(nextJob, source = 'auto-send') {
   if (!nextJob.inputPath) {
     const msg = 'Missing local file path. Load artwork from disk in Electron and retry.';
     state.submission.lastResult = `ERROR: ${msg}`;
-    nextJob.status = 'error';
+    nextJob.status = 'failed';
     nextJob.error = msg;
     log(`Send Job aborted: ${msg}`);
     await appendAudit({ type: 'send-job', copies: Number(nextJob.copies || 1), outcome: 'invalid-payload', error: msg, jobId: nextJob.id });
@@ -1069,7 +1069,7 @@ async function dispatchQueuedJob(nextJob, source = 'auto-send') {
     return true;
   } catch (error) {
     const msg = getActionableError(error);
-    nextJob.status = 'error';
+    nextJob.status = 'failed';
     nextJob.error = msg;
     state.submission.lastResult = `ERROR: ${msg}`;
     log(`RIP adapter unavailable. Send Job aborted. ${msg}`);
