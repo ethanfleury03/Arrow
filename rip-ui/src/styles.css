@@ -1278,6 +1278,16 @@ button[data-c][data-eligibility='blocked'] { box-shadow: 0 0 0 1px var(--danger)
   overflow: hidden;
 }
 
+.queue-flow-summary {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  background: #fff7f8;
+  color: #6d1e27;
+}
+
 .jobs-table-wrap {
   flex: 1;
   min-height: 0;

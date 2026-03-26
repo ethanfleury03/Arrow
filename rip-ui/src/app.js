@@ -993,8 +993,19 @@ function hasActivePrintJob() {
 
 function isPrinterIdleForAutoDispatch() {
   const liveEngine = String(state.liveStatus?.engineState || '').toUpperCase();
-  const appEngine = String(state.status?.engine || '').toUpperCase();
-  return ['IDLE', 'READY', 'OFF', 'UNKNOWN'].includes(liveEngine) && ['IDLE', 'READY', 'UNKNOWN'].includes(appEngine || 'IDLE');
+  const blockingStates = ['PRINTING', 'PAUSED', 'FAULT', 'ERROR', 'NOT_READY', 'BUSY'];
+  return !blockingStates.includes(liveEngine || 'UNKNOWN');
+}
+
+function getAutoSendBlockReason() {
+  if (!state.controls?.autoSendEnabled) return 'Auto-send is OFF.';
+  if (!hasQueuedJobs()) return 'No queued jobs.';
+  if (hasActivePrintJob()) return 'Waiting for active job to finish.';
+  if (!isPrinterIdleForAutoDispatch()) {
+    const liveEngine = String(state.liveStatus?.engineState || 'UNKNOWN').toUpperCase();
+    return `Waiting for printer READY/IDLE (current: ${liveEngine}).`;
+  }
+  return '';
 }
 
 function refreshQueueDepth() {
@@ -1157,6 +1168,16 @@ function render() {
   updateSequenceStatus();
 
   const selectedJobId = state.ui?.selectedJobId;
+  const queueSummaryEl = document.getElementById('queueFlowSummary');
+  if (queueSummaryEl) {
+    const activeCount = state.jobs.filter(job => ['sending', 'printing'].includes(String(job.status || '').toLowerCase())).length;
+    const queuedCount = state.jobs.filter(job => String(job.status || '').toLowerCase() === 'queued').length;
+    const blockedReason = getAutoSendBlockReason();
+    queueSummaryEl.textContent = state.controls?.autoSendEnabled
+      ? `Auto-send ON · ${activeCount} active · ${queuedCount} queued${blockedReason ? ` · ${blockedReason}` : ''}`
+      : `Auto-send OFF · ${queuedCount} queued`;
+  }
+
   const jobTable = document.getElementById('jobTable');
   if (jobTable) {
     const rows = [];
