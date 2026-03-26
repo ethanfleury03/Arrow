@@ -242,12 +242,14 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, lo
   let lastStdout = '';
   let lastStderr = '';
 
-  try {
-    for (let i = 0; i < runs; i += 1) {
-      if (logger?.info && runs > 1) {
-        logger.info({ msg: 'memjet.submitJobData.copy_loop', run: i + 1, runs, requestedCopies: plan.copies });
-      }
+  let degradedCount = 0;
 
+  for (let i = 0; i < runs; i += 1) {
+    if (logger?.info && runs > 1) {
+      logger.info({ msg: 'memjet.submitJobData.copy_loop', run: i + 1, runs, requestedCopies: plan.copies });
+    }
+
+    try {
       const { stdout, stderr } = await execFileAsync(plan.tool, plan.args, {
         cwd: plan.ripCoreRoot,
         timeout: Number(process.env.MEMJET_SUBMIT_TIMEOUT_MS || 180000),
@@ -263,65 +265,56 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, lo
 
       lastStdout = String(stdout || '').trim();
       lastStderr = String(stderr || '').trim();
+    } catch (memjetErr) {
+      const stderr = String(memjetErr?.stderr || '').trim();
+      const stdout = String(memjetErr?.stdout || '').trim();
+      const code = memjetErr?.code ?? memjetErr?.signal ?? 'unknown';
 
-      if (runs > 1 && i < runs - 1 && loopGapMs > 0) {
-        await new Promise(r => setTimeout(r, loopGapMs));
+      if (!isPrintedButTerminalAckTimedOut(stdout, stderr)) {
+        throw new Error(`submitJobData memjet-rip failed (${code}). stdout=${stdout || 'n/a'} stderr=${stderr || 'n/a'}`);
       }
-    }
 
-    return {
-      ok: true,
-      method: 'submitJobData',
-      fallback: 'memjet-rip',
-      lifecycleHandled: true,
-      submissionTool: plan.tool,
-      submissionArgs: plan.args,
-      requestedJobId,
-      effectiveJobId: normalizedJobId,
-      normalizedJobId: normalizedFlag,
-      copiesRequested: plan.copies,
-      copiesExecutionMode: runs > 1 ? 'loop' : 'single',
-      artifactPath,
-      stdout: lastStdout.slice(0, 4000),
-      stderr: lastStderr.slice(0, 4000)
-    };
-  } catch (memjetErr) {
-    const stderr = String(memjetErr?.stderr || '').trim();
-    const stdout = String(memjetErr?.stdout || '').trim();
-    const code = memjetErr?.code ?? memjetErr?.signal ?? 'unknown';
-
-    if (isPrintedButTerminalAckTimedOut(stdout, stderr)) {
+      degradedCount += 1;
+      lastStdout = stdout;
+      lastStderr = stderr;
       if (logger?.warn) {
         logger.warn({
           msg: 'memjet.submitJobData.memjet_rip.degraded_success',
           reason: 'terminal_print_ack_timeout_after_successful_submit_and_start',
           code,
+          run: i + 1,
+          runs,
           requestedJobId,
           effectiveJobId: normalizedJobId,
           normalizedJobId: normalizedFlag
         });
       }
-
-      return {
-        ok: true,
-        degraded: true,
-        degradedReason: 'terminal_print_ack_timeout_after_submit_start_ok',
-        method: 'submitJobData',
-        lifecycleHandled: true,
-        fallback: 'memjet-rip',
-        submissionTool: plan.tool,
-        submissionArgs: plan.args,
-        requestedJobId,
-        effectiveJobId: normalizedJobId,
-        normalizedJobId: normalizedFlag,
-        artifactPath,
-        stdout: stdout.slice(0, 4000),
-        stderr: stderr.slice(0, 4000)
-      };
     }
 
-    throw new Error(`submitJobData memjet-rip failed (${code}). stdout=${stdout || 'n/a'} stderr=${stderr || 'n/a'}`);
+    if (runs > 1 && i < runs - 1 && loopGapMs > 0) {
+      await new Promise(r => setTimeout(r, loopGapMs));
+    }
   }
+
+  return {
+    ok: true,
+    degraded: degradedCount > 0,
+    degradedReason: degradedCount > 0 ? 'terminal_print_ack_timeout_after_submit_start_ok' : undefined,
+    method: 'submitJobData',
+    fallback: 'memjet-rip',
+    lifecycleHandled: true,
+    submissionTool: plan.tool,
+    submissionArgs: plan.args,
+    requestedJobId,
+    effectiveJobId: normalizedJobId,
+    normalizedJobId: normalizedFlag,
+    copiesRequested: plan.copies,
+    copiesExecutionMode: runs > 1 ? 'loop' : 'single',
+    copiesCompleted: runs,
+    artifactPath,
+    stdout: lastStdout.slice(0, 4000),
+    stderr: lastStderr.slice(0, 4000)
+  };
 }
 
 function requiredEnv(name, value) {
