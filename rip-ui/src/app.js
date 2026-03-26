@@ -75,7 +75,8 @@ const INITIAL_STATE = {
     lastUpdate: null,
     source: 'bridge-http',
     running: false,
-    inkLevels: { C: 0, M: 0, Y: 0, K: 0 }
+    inkLevels: { C: 0, M: 0, Y: 0, K: 0 },
+    inkSource: 'none'
   },
   artwork: {
     loaded: false,
@@ -1250,6 +1251,8 @@ function render() {
       ['engineRaw', state.liveStatus.engineStateRawLabel || state.liveStatus.engineState || 'UNKNOWN'],
       ['engineCanonical', state.liveStatus.engineState || 'UNKNOWN'],
       ['queue', String(state.liveStatus.queueLength)],
+      ['ink', JSON.stringify(state.liveStatus.inkLevels || { C: 0, M: 0, Y: 0, K: 0 })],
+      ['inkSource', state.liveStatus.inkSource || 'none'],
       ['faults', state.liveStatus.faults.join(', ') || 'none'],
       ['lastUpdate', last]
     ]
@@ -3643,6 +3646,10 @@ function normalizeLiveStatus(rawStatus = {}, fallbackSource = 'bridge-http') {
   const status = rawStatus || {};
   const details = status?.details || {};
   const resolved = resolveEngineState(status);
+  const parsedInk = parseInkLevelsFromStatus(status);
+  const inkSource = status?.inkLevels
+    ? 'status.inkLevels'
+    : (String(details?.productInfo?.output || '').includes('InkTankStatus(') ? 'details.productInfo.output' : 'none');
 
   return {
     engineState: resolved.engineState,
@@ -3651,7 +3658,8 @@ function normalizeLiveStatus(rawStatus = {}, fallbackSource = 'bridge-http') {
     engineStateCanonical: resolved.canonical,
     queueLength: Number(status?.queueLength ?? details?.queueLength ?? 0),
     faults: Array.isArray(status?.faults) ? status.faults : [],
-    inkLevels: parseInkLevelsFromStatus(status),
+    inkLevels: parsedInk,
+    inkSource,
     timestamp: status?.timestamp || status?.lastUpdate || new Date().toISOString(),
     source: status?.source || fallbackSource,
     _engineStateDebug: resolved
@@ -3676,6 +3684,7 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
   } else if (!state.liveStatus.inkLevels) {
     state.liveStatus.inkLevels = { C: 0, M: 0, Y: 0, K: 0 };
   }
+  state.liveStatus.inkSource = mapped.inkSource || 'none';
   state.liveStatus.lastUpdate = mapped.timestamp;
   state.liveStatus.source = mapped.source;
   state.liveStatus.streamConnected = true;
