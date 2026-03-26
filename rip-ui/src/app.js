@@ -1042,11 +1042,13 @@ async function dispatchQueuedJob(nextJob, source = 'auto-send') {
   persistState();
 
   try {
+    const copies = Math.max(1, Math.floor(Number(nextJob.copies || 1)));
     const result = await bridge.submitJob({
       jobId: nextJob.id,
       fileName: nextJob.name || state.artwork.name || null,
       inputPath: nextJob.inputPath,
-      args: Number(nextJob.copies || 1) > 1 ? ['--copies', String(nextJob.copies)] : [],
+      copies,
+      args: copies > 1 ? ['--copies', String(copies)] : [],
       config: state.config,
       settings: {
         ...deepClone(state.artwork.placement),

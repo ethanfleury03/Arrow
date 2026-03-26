@@ -48,6 +48,42 @@ function firstDefinedString(...values) {
   return '';
 }
 
+function normalizeInputPath(rawPath) {
+  const value = firstDefinedString(rawPath);
+  if (!value) return '';
+  if (value.startsWith('file://')) {
+    try {
+      return decodeURIComponent(value.replace(/^file:\/\//i, ''));
+    } catch {
+      return value.replace(/^file:\/\//i, '');
+    }
+  }
+  return value;
+}
+
+function isRetriableBridgeError(error) {
+  if (!(error instanceof RipBackendError)) return false;
+  if (error.code !== 'BRIDGE_UNAVAILABLE') return false;
+  const status = Number(error?.details?.status);
+  if (Number.isFinite(status) && status >= 500) return true;
+  const message = String(error.message || '').toLowerCase();
+  return message.includes('timeout') || message.includes('aborted') || message.includes('unavailable');
+}
+
+async function withRetry(task, { retries = 1, delayMs = 200 } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await task(attempt);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries || !isRetriableBridgeError(error)) throw error;
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
+}
+
 
 const ENGINE_STATE_VALUE_TO_NAME = Object.freeze({
   1: 'OFF',
@@ -451,16 +487,23 @@ class BridgeHttpAdapter {
   async submitJob(payload) {
     validateSubmitPayload(payload || {});
 
-    const inputPath = firstDefinedString(
+    const inputPath = normalizeInputPath(firstDefinedString(
       payload?.inputPath,
       payload?.input_path,
       payload?.settings?.inputPath,
       payload?.settings?.input_path
-    );
+    ));
 
     if (!inputPath) {
       throw new RipBackendError('BACKEND_SUBMIT_INVALID_PAYLOAD', 'Missing input_path for RIP adapter submission.', {
         remediation: 'Load artwork from a real filesystem path in Electron and provide payload.inputPath.'
+      });
+    }
+
+    const resolvedInputPath = path.isAbsolute(inputPath) ? inputPath : path.resolve(process.cwd(), inputPath);
+    if (!fs.existsSync(resolvedInputPath)) {
+      throw new RipBackendError('BACKEND_SUBMIT_INVALID_PAYLOAD', `Input file does not exist: ${resolvedInputPath}`, {
+        remediation: 'Re-select artwork in UI and retry so Electron sends a valid local filesystem path.'
       });
     }
 
@@ -486,12 +529,12 @@ class BridgeHttpAdapter {
 
     // Preferred path: orchestrate real print sequence through bridge job pipeline.
     try {
-      const ingest = await this.request('POST', '/api/jobs/ingest', {
+      const ingest = await withRetry(() => this.request('POST', '/api/jobs/ingest', {
         jobId: firstDefinedString(payload?.jobId) || undefined,
-        filePath: inputPath,
-        fileName: firstDefinedString(payload?.fileName) || undefined,
+        filePath: resolvedInputPath,
+        fileName: firstDefinedString(payload?.fileName) || path.basename(resolvedInputPath),
         copies
-      }, { baseUrl: this.getBridgeBaseUrl() });
+      }, { baseUrl: this.getBridgeBaseUrl() }), { retries: 1, delayMs: 250 });
 
       const bridgeJobId = firstDefinedString(ingest?.jobId, ingest?.id, payload?.jobId);
       if (!bridgeJobId) {
@@ -500,7 +543,7 @@ class BridgeHttpAdapter {
         });
       }
 
-      const sent = await this.request('POST', `/api/jobs/${bridgeJobId}/send`, { copies }, { baseUrl: this.getBridgeBaseUrl() });
+      const sent = await withRetry(() => this.request('POST', `/api/jobs/${bridgeJobId}/send`, { copies }, { baseUrl: this.getBridgeBaseUrl() }), { retries: 1, delayMs: 250 });
       const finalStatus = firstDefinedString(sent?.state, sent?.status, 'completed');
 
       return {
