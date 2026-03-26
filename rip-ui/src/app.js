@@ -988,46 +988,103 @@ function isDiscoveryReadOnlyMode() {
 }
 
 function hasActivePrintJob() {
-  return state.jobs.some(job => job.status === 'printing');
+  return state.jobs.some(job => ['sending', 'printing'].includes(String(job.status || '').toLowerCase()));
 }
 
 function isPrinterIdleForAutoDispatch() {
   const liveEngine = String(state.liveStatus?.engineState || '').toUpperCase();
   const appEngine = String(state.status?.engine || '').toUpperCase();
-  return ['IDLE', 'READY', 'OFF', 'UNKNOWN'].includes(liveEngine) && ['IDLE', 'READY'].includes(appEngine || 'IDLE');
+  return ['IDLE', 'READY', 'OFF', 'UNKNOWN'].includes(liveEngine) && ['IDLE', 'READY', 'UNKNOWN'].includes(appEngine || 'IDLE');
+}
+
+function refreshQueueDepth() {
+  state.status.queueDepth = state.jobs.filter(job => String(job.status || '').toLowerCase() === 'queued').length;
+}
+
+async function dispatchQueuedJob(nextJob, source = 'auto-send') {
+  const bridge = getBridge();
+  if (!bridge || typeof bridge.submitJob !== 'function') {
+    const msg = 'NOT-CONFIGURED: submitJob bridge hook unavailable.';
+    state.submission.lastResult = `ERROR: ${msg}`;
+    nextJob.status = 'error';
+    nextJob.error = msg;
+    log(msg);
+    await appendAudit({ type: 'send-job', copies: Number(nextJob.copies || 1), outcome: 'bridge-unavailable', error: msg, jobId: nextJob.id });
+    return false;
+  }
+
+  if (!nextJob.inputPath) {
+    const msg = 'Missing local file path. Load artwork from disk in Electron and retry.';
+    state.submission.lastResult = `ERROR: ${msg}`;
+    nextJob.status = 'error';
+    nextJob.error = msg;
+    log(`Send Job aborted: ${msg}`);
+    await appendAudit({ type: 'send-job', copies: Number(nextJob.copies || 1), outcome: 'invalid-payload', error: msg, jobId: nextJob.id });
+    return false;
+  }
+
+  nextJob.status = 'sending';
+  state.status.engine = 'PRINTING';
+  state.queue.push(`dispatch(${nextJob.id}) via ${source}`);
+  log(`Auto-send dispatched ${nextJob.id}.`);
+  render();
+  persistState();
+
+  try {
+    const result = await bridge.submitJob({
+      jobId: nextJob.id,
+      fileName: nextJob.name || state.artwork.name || null,
+      inputPath: nextJob.inputPath,
+      args: Number(nextJob.copies || 1) > 1 ? ['--copies', String(nextJob.copies)] : [],
+      config: state.config,
+      settings: {
+        ...deepClone(state.artwork.placement),
+        inputPath: nextJob.inputPath
+      }
+    });
+
+    nextJob.bridgeJobId = result?.jobId || null;
+    const resultStatus = String(result?.status || 'completed').toLowerCase();
+    const completed = ['completed', 'done', 'finished', 'success'].some(token => resultStatus.includes(token));
+    nextJob.status = completed ? 'done' : 'printing';
+    state.submission.lastResult = `SENT: ${result?.status || 'completed'}`;
+    log(
+      completed
+        ? `Send Job completed for ${nextJob.id} (${nextJob.copies || 1} copies).`
+        : `Send Job accepted for ${nextJob.id}; awaiting finish status.`
+    );
+    await appendAudit({ type: 'send-job', copies: Number(nextJob.copies || 1), outcome: 'adapter-sent', jobId: result?.jobId || nextJob.id });
+    state.status.engine = completed ? 'IDLE' : 'PRINTING';
+    return true;
+  } catch (error) {
+    const msg = getActionableError(error);
+    nextJob.status = 'error';
+    nextJob.error = msg;
+    state.submission.lastResult = `ERROR: ${msg}`;
+    log(`RIP adapter unavailable. Send Job aborted. ${msg}`);
+    await appendAudit({ type: 'send-job', copies: Number(nextJob.copies || 1), outcome: 'adapter-error', error: msg, jobId: nextJob.id });
+    state.status.engine = 'IDLE';
+    return false;
+  } finally {
+    refreshQueueDepth();
+    render();
+    persistState();
+    if (state.controls?.autoSendEnabled) {
+      setTimeout(() => {
+        tryAutoDispatchNextJob('auto-chain');
+      }, 50);
+    }
+  }
 }
 
 function tryAutoDispatchNextJob(source = 'auto-send') {
   if (!state.controls?.autoSendEnabled) return false;
   if (!hasQueuedJobs() || hasActivePrintJob() || !isPrinterIdleForAutoDispatch()) return false;
 
-  const nextJob = state.jobs.find(job => job.status === 'queued');
+  const nextJob = state.jobs.find(job => String(job.status || '').toLowerCase() === 'queued');
   if (!nextJob) return false;
 
-  nextJob.status = 'printing';
-  state.status.engine = 'PRINTING';
-  state.liveStatus.engineState = 'PRINTING';
-  state.liveStatus.engineStateRawLabel = 'PRINTING';
-  state.liveStatus.engineStateCanonical = 'PRINTING';
-  state.queue.push(`dispatch(${nextJob.id}) via ${source}`);
-  log(`Auto-send dispatched ${nextJob.id}.`);
-
-  setTimeout(() => {
-    if (nextJob.status === 'printing') {
-      nextJob.status = 'done';
-      state.status.engine = 'IDLE';
-      state.liveStatus.engineState = 'IDLE';
-      state.liveStatus.engineStateRawLabel = 'DEPRIMED_IDLE';
-      state.liveStatus.engineStateCanonical = 'IDLE';
-      log(`Auto-send completed ${nextJob.id}.`);
-      render();
-      persistState();
-      if (state.controls?.autoSendEnabled) {
-        tryAutoDispatchNextJob('auto-chain');
-      }
-    }
-  }, 1200);
-
+  dispatchQueuedJob(nextJob, source);
   return true;
 }
 
@@ -1350,7 +1407,7 @@ function addMockJob() {
   const id = `JOB-${String(state.counter).padStart(4, '0')}`;
   const name = state.artwork.loaded ? `${state.artwork.name.replace(/\.pdf$/i, '')}_${state.counter}.pdf` : `mock_${state.counter}.pdf`;
   state.jobs.push({ id, name, status: 'queued' });
-  state.status.queueDepth = state.jobs.length;
+  refreshQueueDepth();
   state.queue.push(`submit(${id})`);
   log(`Queued deterministic mock job ${id}`);
   tryAutoDispatchNextJob('job-added');
@@ -1365,21 +1422,6 @@ function getRequestedCopies() {
 
 async function handleSendJobCopies(copyCount) {
   const copies = Math.max(1, Math.floor(Number(copyCount) || 1));
-  state.submission.lastResult = `PENDING: Send requested (${copies} copies)`;
-  state.queue.push(`sendJob(copies=${copies})`);
-
-  const bridge = getBridge();
-  const localJobId = generateJobId();
-
-  if (!bridge || typeof bridge.submitJob !== 'function') {
-    const msg = 'NOT-CONFIGURED: submitJob bridge hook unavailable.';
-    state.submission.lastResult = `ERROR: ${msg}`;
-    log(msg);
-    await appendAudit({ type: 'send-job', copies, outcome: 'bridge-unavailable', error: msg });
-    render();
-    persistState();
-    return;
-  }
 
   if (!state.artwork.inputPath) {
     const msg = 'Missing local file path. Load artwork from disk in Electron and retry.';
@@ -1391,27 +1433,26 @@ async function handleSendJobCopies(copyCount) {
     return;
   }
 
-  try {
-    const result = await bridge.submitJob({
-      jobId: localJobId,
-      fileName: state.artwork.name || null,
-      inputPath: state.artwork.inputPath,
-      args: copies > 1 ? ['--copies', String(copies)] : [],
-      config: state.config,
-      settings: {
-        ...deepClone(state.artwork.placement),
-        inputPath: state.artwork.inputPath
-      }
-    });
+  const localJobId = generateJobId();
+  state.jobs.push({
+    id: localJobId,
+    name: state.artwork.name || `job_${localJobId}.pdf`,
+    status: 'queued',
+    copies,
+    inputPath: state.artwork.inputPath,
+    createdAt: new Date().toISOString()
+  });
 
-    state.submission.lastResult = `SENT: ${result.status || 'queued'}`;
-    log(`Send Job submitted to RIP adapter for ${result.jobId || localJobId} (${copies} copies).`);
-    await appendAudit({ type: 'send-job', copies, outcome: 'adapter-sent', jobId: result.jobId || localJobId });
-  } catch (error) {
-    const msg = getActionableError(error);
-    state.submission.lastResult = `ERROR: ${msg}`;
-    log(`RIP adapter unavailable. Send Job aborted. ${msg}`);
-    await appendAudit({ type: 'send-job', copies, outcome: 'adapter-error', error: msg });
+  state.submission.lastJobId = localJobId;
+  state.submission.lastResult = `QUEUED: ${localJobId} (${copies} copies)`;
+  state.queue.push(`queued(${localJobId}, copies=${copies})`);
+  refreshQueueDepth();
+  log(`Queued ${localJobId} (${copies} copies).`);
+
+  await appendAudit({ type: 'send-job', copies, outcome: 'queued', jobId: localJobId });
+
+  if (state.controls?.autoSendEnabled) {
+    tryAutoDispatchNextJob('queue-on-submit');
   }
 
   render();
@@ -1653,7 +1694,7 @@ function runFaultScenario() {
     }
 
     state.jobs = state.jobs.map(j => ({ ...j, status: 'held' }));
-    state.status.queueDepth = state.jobs.length;
+    refreshQueueDepth();
     log('Fault injection: set all jobs to held before prepare.');
     render();
     persistState();
@@ -1684,7 +1725,7 @@ function runRecoveryScenario() {
 
   function afterSetup() {
     state.jobs = state.jobs.map(j => ({ ...j, status: 'held' }));
-    state.status.queueDepth = state.jobs.length;
+    refreshQueueDepth();
     log('Recovery scenario fault injection: set all jobs to held before prepare.');
     render();
     persistState();
@@ -3529,6 +3570,18 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
   state.liveStatus.lastUpdate = mapped.timestamp;
   state.liveStatus.source = mapped.source;
   state.liveStatus.streamConnected = true;
+
+  const liveEngineUpper = String(mapped.engineState || '').toUpperCase();
+  if (['IDLE', 'READY'].includes(liveEngineUpper)) {
+    const printingJob = state.jobs.find(job => String(job.status || '').toLowerCase() === 'printing');
+    if (printingJob) {
+      printingJob.status = 'done';
+      state.queue.push(`complete(${printingJob.id}) via ${channel}`);
+      log(`Print finished for ${printingJob.id}; queue advancing.`);
+      refreshQueueDepth();
+    }
+  }
+
   tryAutoDispatchNextJob(channel);
   render();
   persistState();
@@ -4314,6 +4367,7 @@ function bind() {
 }
 
 bind();
+refreshQueueDepth();
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('resize', () => {
     renderLayoutRuler();
