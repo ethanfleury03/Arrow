@@ -74,7 +74,16 @@ const INITIAL_STATE = {
     faults: [],
     lastUpdate: null,
     source: 'bridge-http',
-    running: false
+    running: false,
+    inkLevels: { C: 0, M: 0, Y: 0, K: 0 },
+    inkSource: 'none',
+    capabilities: {
+      movePrintheads: {
+        supported: true,
+        reason: null,
+        positions: ['capped', 'raised', 'print']
+      }
+    }
   },
   artwork: {
     loaded: false,
@@ -1249,6 +1258,8 @@ function render() {
       ['engineRaw', state.liveStatus.engineStateRawLabel || state.liveStatus.engineState || 'UNKNOWN'],
       ['engineCanonical', state.liveStatus.engineState || 'UNKNOWN'],
       ['queue', String(state.liveStatus.queueLength)],
+      ['ink', JSON.stringify(state.liveStatus.inkLevels || { C: 0, M: 0, Y: 0, K: 0 })],
+      ['inkSource', state.liveStatus.inkSource || 'none'],
       ['faults', state.liveStatus.faults.join(', ') || 'none'],
       ['lastUpdate', last]
     ]
@@ -1262,6 +1273,20 @@ function render() {
     const canonicalState = String(state.liveStatus?.engineState || '').trim().toUpperCase();
     systemStateValueEl.textContent = rawEngineState || canonicalState || 'UNKNOWN';
   }
+
+  const ink = state.liveStatus?.inkLevels || { C: 0, M: 0, Y: 0, K: 0 };
+  ['C', 'M', 'Y', 'K'].forEach(channel => {
+    const pct = Math.max(0, Math.min(100, Number(ink[channel]) || 0));
+    const pctEl = document.getElementById(`inkPercent${channel}`);
+    if (pctEl) {
+      pctEl.textContent = `${pct}%`;
+      pctEl.setAttribute('aria-label', `Ink ${channel} ${pct} percent`);
+    }
+    const barEl = document.getElementById(`inkBar${channel}`);
+    if (barEl) {
+      barEl.style.width = `${pct}%`;
+    }
+  });
 
   const simBadge = document.getElementById('simulationBadge');
   if (simBadge) {
@@ -3587,10 +3612,52 @@ function resolveEngineState(status = {}) {
   };
 }
 
+function parseInkLevelsFromStatus(status = {}) {
+  const direct = status?.inkLevels;
+  if (direct && typeof direct === 'object') {
+    return {
+      C: Math.max(0, Math.min(100, Number(direct.C) || 0)),
+      M: Math.max(0, Math.min(100, Number(direct.M) || 0)),
+      Y: Math.max(0, Math.min(100, Number(direct.Y) || 0)),
+      K: Math.max(0, Math.min(100, Number(direct.K) || 0))
+    };
+  }
+
+  const details = status?.details || {};
+  const output = String(details?.productInfo?.output || '');
+  if (!output) return null;
+
+  const byColor = {};
+  const tankRegex = /InkTankStatus\(([^)]*)\)/g;
+  let match;
+  while ((match = tankRegex.exec(output)) !== null) {
+    const chunk = match[1] || '';
+    const cap = Number((chunk.match(/inkCapacity\s*=\s*([0-9.]+)/i) || [])[1]);
+    const rem = Number((chunk.match(/inkRemaining\s*=\s*([0-9.]+)/i) || [])[1]);
+    const color = Number((chunk.match(/color\s*=\s*(\d+)/i) || [])[1]);
+    if (!Number.isFinite(cap) || cap <= 0 || !Number.isFinite(rem) || !Number.isInteger(color)) continue;
+    const pct = Math.max(0, Math.min(100, Math.round((rem / cap) * 100)));
+    byColor[color] = pct;
+  }
+
+  if (!Object.keys(byColor).length) return null;
+  return {
+    C: Number.isFinite(byColor[1]) ? byColor[1] : 0,
+    M: Number.isFinite(byColor[2]) ? byColor[2] : 0,
+    Y: Number.isFinite(byColor[3]) ? byColor[3] : 0,
+    K: Number.isFinite(byColor[4]) ? byColor[4] : 0
+  };
+}
+
 function normalizeLiveStatus(rawStatus = {}, fallbackSource = 'bridge-http') {
   const status = rawStatus || {};
   const details = status?.details || {};
   const resolved = resolveEngineState(status);
+  const parsedInk = parseInkLevelsFromStatus(status);
+  const inkSource = status?.inkLevels
+    ? 'status.inkLevels'
+    : (String(details?.productInfo?.output || '').includes('InkTankStatus(') ? 'details.productInfo.output' : 'none');
+  const fallbackMoveHeadOp = details?.diagnostics?.operations?.startMovingPrintheads || {};
 
   return {
     engineState: resolved.engineState,
@@ -3599,6 +3666,15 @@ function normalizeLiveStatus(rawStatus = {}, fallbackSource = 'bridge-http') {
     engineStateCanonical: resolved.canonical,
     queueLength: Number(status?.queueLength ?? details?.queueLength ?? 0),
     faults: Array.isArray(status?.faults) ? status.faults : [],
+    inkLevels: parsedInk,
+    inkSource,
+    capabilities: status?.capabilities || {
+      movePrintheads: {
+        supported: Boolean(fallbackMoveHeadOp?.allowed ?? true),
+        reason: fallbackMoveHeadOp?.reason || null,
+        positions: ['capped', 'raised', 'print']
+      }
+    },
     timestamp: status?.timestamp || status?.lastUpdate || new Date().toISOString(),
     source: status?.source || fallbackSource,
     _engineStateDebug: resolved
@@ -3618,6 +3694,13 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
   state.liveStatus.engineStateCanonical = mapped.engineStateCanonical;
   state.liveStatus.queueLength = mapped.queueLength;
   state.liveStatus.faults = mapped.faults;
+  if (mapped.inkLevels && typeof mapped.inkLevels === 'object') {
+    state.liveStatus.inkLevels = mapped.inkLevels;
+  } else if (!state.liveStatus.inkLevels) {
+    state.liveStatus.inkLevels = { C: 0, M: 0, Y: 0, K: 0 };
+  }
+  state.liveStatus.inkSource = mapped.inkSource || 'none';
+  state.liveStatus.capabilities = mapped.capabilities || state.liveStatus.capabilities;
   state.liveStatus.lastUpdate = mapped.timestamp;
   state.liveStatus.source = mapped.source;
   state.liveStatus.streamConnected = true;
@@ -3646,6 +3729,7 @@ function markStatusStreamStale(reason = 'Status stream stale') {
   state.liveStatus.streamConnected = false;
   state.liveStatus.source = 'bridge-down';
   state.liveStatus.faults = [`STATUS_STALE: ${reason}`];
+  state.liveStatus.inkLevels = { C: 0, M: 0, Y: 0, K: 0 };
   state.liveStatus.lastUpdate = new Date().toISOString();
   render();
 }
@@ -3695,6 +3779,7 @@ function startStatusPolling() {
       state.liveStatus.source = 'bridge-down';
       state.liveStatus.streamConnected = false;
       state.liveStatus.faults = [`STATUS_ERR: ${actionable}`];
+      state.liveStatus.inkLevels = { C: 0, M: 0, Y: 0, K: 0 };
       state.liveStatus.lastUpdate = new Date().toISOString();
       log(`Status polling error: ${actionable}`);
       render();
@@ -3713,6 +3798,7 @@ function startStatusPolling() {
   const bridge = getBridge();
   if (bridge && typeof bridge.subscribeStatusStream === 'function') {
     try {
+      let lastInkHydrateAt = 0;
       streamUnsubscribe = bridge.subscribeStatusStream(({ type, payload }) => {
         if (type === 'open') {
           state.liveStatus.streamConnected = true;
@@ -3732,7 +3818,15 @@ function startStatusPolling() {
             pollTimer = null;
             log('Fallback polling stopped after SSE update.');
           }
-          applyLiveStatus(payload || {}, { channel: 'status-sse' });
+          const snapshot = payload || {};
+          applyLiveStatus(snapshot, { channel: 'status-sse' });
+
+          const missingInk = !snapshot?.inkLevels || Object.values(snapshot.inkLevels || {}).every(v => Number(v) === 0);
+          const now = Date.now();
+          if (missingInk && now - lastInkHydrateAt > 5000) {
+            lastInkHydrateAt = now;
+            runFallbackPoll();
+          }
           return;
         }
 
@@ -3783,6 +3877,17 @@ function computeEligibility(command) {
       message: 'Status polling is not running; commands can proceed with reduced live telemetry.',
       remediation: 'Start status polling to improve safety visibility before mutating operations.'
     });
+  }
+
+  if (['head_cap', 'head_raise', 'head_print'].includes(normalizedCommand)) {
+    const moveHeadCaps = state.liveStatus?.capabilities?.movePrintheads || {};
+    if (moveHeadCaps.supported === false) {
+      checks.push({
+        level: 'block',
+        message: 'Printhead controls are not supported by the current backend runtime.',
+        remediation: moveHeadCaps.reason || 'Update remote pesctl/memjet runtime to support startMovingPrintheads.'
+      });
+    }
   }
 
   if (normalizedCommand === 'print_prepare' && state.jobs.every(j => j.status !== 'queued')) {

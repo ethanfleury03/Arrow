@@ -48,6 +48,33 @@ const COMMAND_LOG_META = {
   head_print: { memjetMethod: 'startMovingPrintheads', args: [{ printUnits: DEFAULT_PRINT_UNITS, position: 'print' }] }
 };
 
+function classifyCommandRuntimeError(error, command) {
+  const msg = String(error?.message || 'unknown_error');
+  const lower = msg.toLowerCase();
+  const isHeadCommand = String(command || '').startsWith('head_');
+
+  if (isHeadCommand && lower.includes('importerror') && lower.includes('printheadposition')) {
+    return {
+      status: 409,
+      payload: {
+        accepted: false,
+        error: 'runtime_mismatch',
+        command,
+        message: 'Printhead controls unavailable: remote PES runtime is missing PrintheadPosition enum compatibility.',
+        remediation: 'Update remote pesctl/memjet bridge runtime to a version that supports startMovingPrintheads position enums (capped/raised/print).',
+        source: 'bridge-http',
+        timestamp: new Date().toISOString(),
+        details: {
+          code: 'PRINTHEAD_RUNTIME_MISMATCH',
+          rawError: msg.slice(0, 4000)
+        }
+      }
+    };
+  }
+
+  return null;
+}
+
 function hasSimulatedSignal(value, depth = 0) {
   if (depth > 4 || value == null) return false;
 
@@ -156,6 +183,31 @@ function extractEmbeddedJsonRawFromOutput(text) {
   }
 
   return null;
+}
+
+function extractInkLevels(status = {}) {
+  const details = status?.details || {};
+  const output = String(details?.productInfo?.output || '');
+  if (!output) return { C: 0, M: 0, Y: 0, K: 0 };
+
+  const byColor = {};
+  const tankRegex = /InkTankStatus\(([^)]*)\)/g;
+  let match;
+  while ((match = tankRegex.exec(output)) !== null) {
+    const chunk = match[1] || '';
+    const cap = Number((/inkCapacity\s*=\s*([0-9.]+)/i.exec(chunk) || [])[1]);
+    const rem = Number((/inkRemaining\s*=\s*([0-9.]+)/i.exec(chunk) || [])[1]);
+    const color = Number((/color\s*=\s*(\d+)/i.exec(chunk) || [])[1]);
+    if (!Number.isFinite(cap) || cap <= 0 || !Number.isFinite(rem) || !Number.isInteger(color)) continue;
+    byColor[color] = Math.max(0, Math.min(100, Math.round((rem / cap) * 100)));
+  }
+
+  return {
+    C: Number.isFinite(byColor[1]) ? byColor[1] : 0,
+    M: Number.isFinite(byColor[2]) ? byColor[2] : 0,
+    Y: Number.isFinite(byColor[3]) ? byColor[3] : 0,
+    K: Number.isFinite(byColor[4]) ? byColor[4] : 0
+  };
 }
 
 function resolveEngineState(status = {}) {
@@ -297,6 +349,7 @@ function createBridgeServer(options = {}) {
       engineStateRawLabel: resolved.rawLabel,
       engineStateCanonical: resolved.canonical,
       queueLength: Number(details?.queueLength || 0),
+      inkLevels: extractInkLevels(status),
       connected: Boolean(status?.connected),
       degraded: Boolean(status?.degraded),
       source: 'bridge-http',
@@ -340,6 +393,7 @@ function createBridgeServer(options = {}) {
         engineStateRawNumeric: snapshot.engineStateRawNumeric,
         engineStateRawLabel: snapshot.engineStateRawLabel,
         queueLength: snapshot.queueLength,
+        inkLevels: snapshot.inkLevels,
         connected: snapshot.connected,
         degraded: snapshot.degraded
       });
@@ -355,6 +409,7 @@ function createBridgeServer(options = {}) {
         engineStateRawLabel: 'UNKNOWN',
         engineStateCanonical: 'UNKNOWN',
         queueLength: 0,
+        inkLevels: { C: 0, M: 0, Y: 0, K: 0 },
         connected: false,
         degraded: true,
         source: 'bridge-http',
@@ -411,11 +466,33 @@ function createBridgeServer(options = {}) {
         if (!latestRawDeviceStatus) {
           await pollSystemState();
         }
-        return json(res, 200, latestRawDeviceStatus || {
-          connected: false,
-          degraded: true,
-          details: null,
-          lastUpdate: new Date().toISOString()
+
+        const raw = latestRawDeviceStatus || {};
+        const snapshot = latestSystemState || {};
+
+        const moveHeadOp = raw?.details?.diagnostics?.operations?.startMovingPrintheads || {};
+
+        return json(res, 200, {
+          ...raw,
+          engineState: snapshot.engineState || raw.engineState || 'UNKNOWN',
+          engineStateRawNumeric: Number.isInteger(snapshot.engineStateRawNumeric)
+            ? snapshot.engineStateRawNumeric
+            : (Number.isInteger(raw.engineStateRawNumeric) ? raw.engineStateRawNumeric : null),
+          engineStateRawLabel: String(snapshot.engineStateRawLabel || raw.engineStateRawLabel || 'UNKNOWN'),
+          engineStateCanonical: snapshot.engineStateCanonical || raw.engineStateCanonical || null,
+          queueLength: Number(snapshot.queueLength ?? raw.queueLength ?? 0),
+          inkLevels: snapshot.inkLevels || extractInkLevels(raw),
+          connected: Boolean(snapshot.connected ?? raw.connected),
+          degraded: Boolean(snapshot.degraded ?? raw.degraded),
+          capabilities: {
+            movePrintheads: {
+              supported: Boolean(moveHeadOp?.allowed),
+              reason: moveHeadOp?.reason || null,
+              positions: ['capped', 'raised', 'print']
+            }
+          },
+          source: 'bridge-http',
+          lastUpdate: snapshot.timestamp || raw.lastUpdate || new Date().toISOString()
         });
       }
 
@@ -439,7 +516,17 @@ function createBridgeServer(options = {}) {
           args: commandMeta?.args || []
         });
 
-        const result = await handler(adapter);
+        let result;
+        try {
+          result = await handler(adapter);
+        } catch (error) {
+          const classified = classifyCommandRuntimeError(error, command);
+          if (classified) {
+            logger.error({ msg: 'bridge.command.runtime_mismatch', command, err: error?.message || String(error) });
+            return json(res, classified.status, classified.payload);
+          }
+          throw error;
+        }
 
         if (command.startsWith('head_') && hasSimulatedSignal(result)) {
           logger.error({ msg: 'bridge.command.rejected_simulated', command, result });
