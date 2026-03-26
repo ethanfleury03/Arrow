@@ -56,6 +56,12 @@
       "README.md",
       "HOOKUP_CHECKLIST.md"
     ],
+    "extraResources": [
+      {
+        "from": "bin/plink.exe",
+        "to": "bin/plink.exe"
+      }
+    ],
     "directories": {
       "output": "dist"
     },

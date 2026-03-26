@@ -210,6 +210,25 @@ function interpolateTemplate(template, vars) {
   return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_, key) => (key in vars ? String(vars[key]) : ''));
 }
 
+function resolveBundledPlinkPath() {
+  const envPath = String(process.env.MEMJET_PLINK_PATH || '').trim();
+  if (envPath && fs.existsSync(envPath)) return envPath;
+
+  const candidates = [
+    path.resolve(process.cwd(), 'bin', 'plink.exe'),
+    path.resolve(__dirname, '..', 'bin', 'plink.exe'),
+    path.resolve(process.resourcesPath || '', 'bin', 'plink.exe')
+  ].filter(Boolean);
+
+  return candidates.find(candidate => {
+    try {
+      return fs.existsSync(candidate);
+    } catch {
+      return false;
+    }
+  }) || null;
+}
+
 async function hasPlinkInPath() {
   try {
     const cmd = process.platform === 'win32' ? 'where' : 'which';
@@ -266,12 +285,14 @@ async function runSshOperation({ settings, operation, payload, logger }) {
   try {
     let run;
     if (process.platform === 'win32' && settings.sshPassword) {
-      const hasPlink = await hasPlinkInPath();
-      if (!hasPlink) {
-        throw new Error('Windows password SSH requires plink in PATH. Install PuTTY/plink or configure SSH key auth.');
+      const bundledPlink = resolveBundledPlinkPath();
+      const hasPathPlink = await hasPlinkInPath();
+      const plinkBin = bundledPlink || (hasPathPlink ? 'plink' : null);
+      if (!plinkBin) {
+        throw new Error('Windows password SSH requires plink. Add bin/plink.exe (vendored) or install PuTTY/plink in PATH.');
       }
 
-      run = await execFileAsync('plink', [
+      run = await execFileAsync(plinkBin, [
         '-batch',
         '-P', String(settings.sshPort),
         '-l', settings.sshUser,
