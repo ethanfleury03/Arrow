@@ -199,6 +199,8 @@ function isPrintedButTerminalAckTimedOut(stdout = '', stderr = '') {
     || /phase_transition[\s\S]*"state_after":"TX_DONE"/.test(combined);
   const hadStart = /guarded_start[\s\S]*"result":"OK"/.test(combined)
     || /start_print_postcheck[\s\S]*"result":"OK"/.test(combined);
+  const hadBenignSessionCloseRace = /Print session must be active/i.test(combined)
+    || /cleanup_done[\s\S]*prepareToPrint blocked: engine not PRIMED_IDLE\/PRINT_READY/.test(combined);
   const hadTerminalTimeout = /TERMINAL_PRINT_ACK_TIMEOUT/.test(combined)
     || /Timed out waiting for terminal print completion state/i.test(combined)
     || /WAIT_TERMINAL_STATE/.test(combined)
@@ -206,7 +208,7 @@ function isPrintedButTerminalAckTimedOut(stdout = '', stderr = '') {
     || /wait_session_complete_after_start_timeout/.test(combined)
     || /active_seen=true,\s*last=PRE_JOB/.test(combined);
 
-  return hadDataSubmit && hadStart && hadTerminalTimeout;
+  return hadDataSubmit && ((hadStart && hadTerminalTimeout) || hadBenignSessionCloseRace);
 }
 
 async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, logger, requestedJobId = null, normalizedJobId = null, normalizedFlag = false }) {
@@ -238,6 +240,7 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, lo
   const perRunCopies = (forceCopyLoop && plan.copies > 1) ? 1 : plan.copies;
   const runs = (forceCopyLoop && plan.copies > 1) ? plan.copies : 1;
   const loopGapMs = Number(process.env.MEMJET_COPY_LOOP_GAP_MS || 1500);
+  const degradedGapMs = Number(process.env.MEMJET_COPY_LOOP_DEGRADED_GAP_MS || 45000);
 
   let lastStdout = '';
   let lastStderr = '';
@@ -245,6 +248,7 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, lo
   let degradedCount = 0;
 
   for (let i = 0; i < runs; i += 1) {
+    let degradedThisRun = false;
     if (logger?.info && runs > 1) {
       logger.info({ msg: 'memjet.submitJobData.copy_loop', run: i + 1, runs, requestedCopies: plan.copies });
     }
@@ -275,6 +279,7 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, lo
       }
 
       degradedCount += 1;
+      degradedThisRun = true;
       lastStdout = stdout;
       lastStderr = stderr;
       if (logger?.warn) {
@@ -291,8 +296,11 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, lo
       }
     }
 
-    if (runs > 1 && i < runs - 1 && loopGapMs > 0) {
-      await new Promise(r => setTimeout(r, loopGapMs));
+    if (runs > 1 && i < runs - 1) {
+      const gapMs = degradedThisRun ? degradedGapMs : loopGapMs;
+      if (gapMs > 0) {
+        await new Promise(r => setTimeout(r, gapMs));
+      }
     }
   }
 
