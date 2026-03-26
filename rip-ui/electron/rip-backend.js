@@ -607,13 +607,23 @@ function parseInkLevelsFromStatusPayload(status = {}) {
     };
   }
 
-  const output = String(status?.details?.productInfo?.output || '');
-  if (!output) return null;
+  const outputCandidates = [
+    status?.details?.productInfo?.output,
+    status?.details?.productInfo?.result?.output,
+    status?.details?.productInfo?.rawStdout,
+    status?.details?.productInfo?.resultRepr,
+    status?.details?.diagnostics?.lastRealCall?.result?.output
+  ]
+    .map(v => String(v || ''))
+    .filter(Boolean);
+
+  const scanText = `${outputCandidates.join('\n')}\n${JSON.stringify(status || {})}`;
+  if (!scanText.trim()) return null;
 
   const byColor = {};
   const tankRegex = /InkTankStatus\(([^)]*)\)/g;
   let match;
-  while ((match = tankRegex.exec(output)) !== null) {
+  while ((match = tankRegex.exec(scanText)) !== null) {
     const chunk = match[1] || '';
     const cap = Number((/inkCapacity\s*=\s*([0-9.]+)/i.exec(chunk) || [])[1]);
     const rem = Number((/inkRemaining\s*=\s*([0-9.]+)/i.exec(chunk) || [])[1]);
