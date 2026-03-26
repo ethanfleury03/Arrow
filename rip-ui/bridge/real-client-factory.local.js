@@ -172,12 +172,14 @@ function buildMemjetRipCommand({ artifactPath, host, dataPort }) {
   const configured = process.env.MEMJET_RIP_BIN || process.env.MEMJET_SUBMITTER_BIN || process.env.RIP_MEMJET_RIP_BIN;
   const defaultWinBin = path.resolve(repoRoot, 'rip-core', 'src', 'build', 'Release', 'memjet-rip.exe');
   const tool = configured || ((process.platform === 'win32' && fs.existsSync(defaultWinBin)) ? defaultWinBin : 'memjet-rip.exe');
-  const defaultTempDir = path.resolve(repoRoot, 'rip-core', 'temp');
+  const ripCoreRoot = process.env.MEMJET_RIP_ROOT || path.resolve(repoRoot, 'rip-core');
+  const defaultTempDir = path.resolve(ripCoreRoot, 'temp');
   const tempDir = process.env.MEMJET_RIP_TEMP_DIR || process.env.MEMJET_SUBMIT_TEMP_DIR || defaultTempDir;
+  const jslConfigPath = process.env.JSL_CONFIG_PATH || path.resolve(ripCoreRoot, 'jsl-sdk', 'JslConfigs.xml');
   const effectiveHost = ARROW_PES.host;
   const effectiveDataPort = ARROW_PES.dataPort;
   const args = [String(artifactPath), '--pes-ip', String(effectiveHost), '--pes-port', String(effectiveDataPort), '-v'];
-  return { tool, args, tempDir };
+  return { tool, args, tempDir, ripCoreRoot, jslConfigPath };
 }
 
 async function runMemjetRipSubmit({ artifactPath, host, dataPort, logger, requestedJobId = null, normalizedJobId = null, normalizedFlag = false }) {
@@ -197,6 +199,8 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, logger, reques
       tool: plan.tool,
       args: plan.args,
       tempDir: plan.tempDir,
+      jslConfigPath: plan.jslConfigPath,
+      ripCoreRoot: plan.ripCoreRoot,
       host,
       dataPort
     });
@@ -204,12 +208,14 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, logger, reques
 
   try {
     const { stdout, stderr } = await execFileAsync(plan.tool, plan.args, {
+      cwd: plan.ripCoreRoot,
       timeout: Number(process.env.MEMJET_SUBMIT_TIMEOUT_MS || 180000),
       maxBuffer: 8 * 1024 * 1024,
       env: {
         ...process.env,
         TEMP: plan.tempDir,
-        TMP: plan.tempDir
+        TMP: plan.tempDir,
+        JSL_CONFIG_PATH: plan.jslConfigPath
       }
     });
 
