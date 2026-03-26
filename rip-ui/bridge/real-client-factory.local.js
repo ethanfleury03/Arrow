@@ -140,7 +140,10 @@ function normalizeJobId(input) {
 }
 
 function buildGborcatCommand({ host, dataPort, jobId, artifactPath }) {
-  const tool = process.env.MEMJET_GBORCAT_BIN || process.env.RIP_GBORCAT_BIN || 'gborcat';
+  const envTool = process.env.MEMJET_GBORCAT_BIN || process.env.RIP_GBORCAT_BIN;
+  const bundledWinTool = path.resolve(process.cwd(), 'runtime', 'bin', 'gborcat.exe');
+  const tool = envTool
+    || ((process.platform === 'win32' && fs.existsSync(bundledWinTool)) ? bundledWinTool : 'gborcat');
   const args = ['-h', String(host), '-c', '1', '-r', '1', '-j', String(jobId), '-v', String(artifactPath)];
 
   if (Number.isFinite(Number(dataPort)) && Number(dataPort) > 0 && String(process.env.MEMJET_GBORCAT_USE_PORT || '').trim() === '1') {
