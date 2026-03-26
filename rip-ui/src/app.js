@@ -3615,7 +3615,7 @@ function parseInkLevelsFromStatus(status = {}) {
 
   const details = status?.details || {};
   const output = String(details?.productInfo?.output || '');
-  if (!output) return { C: 0, M: 0, Y: 0, K: 0 };
+  if (!output) return null;
 
   const byColor = {};
   const tankRegex = /InkTankStatus\(([^)]*)\)/g;
@@ -3630,6 +3630,7 @@ function parseInkLevelsFromStatus(status = {}) {
     byColor[color] = pct;
   }
 
+  if (!Object.keys(byColor).length) return null;
   return {
     C: Number.isFinite(byColor[1]) ? byColor[1] : 0,
     M: Number.isFinite(byColor[2]) ? byColor[2] : 0,
@@ -3670,7 +3671,11 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
   state.liveStatus.engineStateCanonical = mapped.engineStateCanonical;
   state.liveStatus.queueLength = mapped.queueLength;
   state.liveStatus.faults = mapped.faults;
-  state.liveStatus.inkLevels = mapped.inkLevels || { C: 0, M: 0, Y: 0, K: 0 };
+  if (mapped.inkLevels && typeof mapped.inkLevels === 'object') {
+    state.liveStatus.inkLevels = mapped.inkLevels;
+  } else if (!state.liveStatus.inkLevels) {
+    state.liveStatus.inkLevels = { C: 0, M: 0, Y: 0, K: 0 };
+  }
   state.liveStatus.lastUpdate = mapped.timestamp;
   state.liveStatus.source = mapped.source;
   state.liveStatus.streamConnected = true;
@@ -3768,6 +3773,7 @@ function startStatusPolling() {
   const bridge = getBridge();
   if (bridge && typeof bridge.subscribeStatusStream === 'function') {
     try {
+      let lastInkHydrateAt = 0;
       streamUnsubscribe = bridge.subscribeStatusStream(({ type, payload }) => {
         if (type === 'open') {
           state.liveStatus.streamConnected = true;
@@ -3787,7 +3793,15 @@ function startStatusPolling() {
             pollTimer = null;
             log('Fallback polling stopped after SSE update.');
           }
-          applyLiveStatus(payload || {}, { channel: 'status-sse' });
+          const snapshot = payload || {};
+          applyLiveStatus(snapshot, { channel: 'status-sse' });
+
+          const missingInk = !snapshot?.inkLevels || Object.values(snapshot.inkLevels || {}).every(v => Number(v) === 0);
+          const now = Date.now();
+          if (missingInk && now - lastInkHydrateAt > 5000) {
+            lastInkHydrateAt = now;
+            runFallbackPoll();
+          }
           return;
         }
 
