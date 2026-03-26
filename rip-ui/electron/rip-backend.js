@@ -439,9 +439,7 @@ class BridgeHttpAdapter {
   }
 
   async getStatus() {
-    // Primary: legacy bridge status endpoint.
-    try {
-      const status = await this.request('GET', '/api/device/status', undefined, { baseUrl: this.getBridgeBaseUrl() });
+    const mapBridgeStatus = status => {
       const resolvedState = mapStatusEngineState(status, this.logger);
 
       if (process.env.RIP_STATUS_DEBUG === '1') {
@@ -467,18 +465,30 @@ class BridgeHttpAdapter {
         details: status?.details || null,
         timestamp: status?.lastUpdate || nowIso()
       };
-    } catch (_bridgeError) {
-      // Fallback: RIP adapter health endpoint when bridge status API is unavailable.
-      const health = await this.request('GET', '/health', undefined, { baseUrl: this.getAdapterBaseUrl() });
-      return {
-        engineState: health?.ok ? 'READY' : 'UNKNOWN',
-        engineStateRawNumeric: null,
-        engineStateRawLabel: health?.ok ? 'ADAPTER_OK' : 'UNKNOWN',
-        engineStateCanonical: health?.ok ? 'READY' : null,
-        queueLength: 0,
-        faults: [],
-        timestamp: nowIso()
-      };
+    };
+
+    // Primary: bridge status endpoint.
+    try {
+      const status = await this.request('GET', '/api/device/status', undefined, { baseUrl: this.getBridgeBaseUrl() });
+      return mapBridgeStatus(status);
+    } catch (bridgeError) {
+      // Retry once before degrading status; avoid adapter /health fallback.
+      try {
+        const retryStatus = await this.request('GET', '/api/device/status', undefined, { baseUrl: this.getBridgeBaseUrl() });
+        return mapBridgeStatus(retryStatus);
+      } catch {
+        return {
+          engineState: 'UNKNOWN',
+          engineStateRawNumeric: null,
+          engineStateRawLabel: 'UNKNOWN',
+          engineStateCanonical: null,
+          queueLength: 0,
+          faults: [String(bridgeError?.message || 'bridge-status-unavailable')],
+          inkLevels: { C: 0, M: 0, Y: 0, K: 0 },
+          details: null,
+          timestamp: nowIso()
+        };
+      }
     }
   }
 
