@@ -48,6 +48,42 @@ function firstDefinedString(...values) {
   return '';
 }
 
+function normalizeInputPath(rawPath) {
+  const value = firstDefinedString(rawPath);
+  if (!value) return '';
+  if (value.startsWith('file://')) {
+    try {
+      return decodeURIComponent(value.replace(/^file:\/\//i, ''));
+    } catch {
+      return value.replace(/^file:\/\//i, '');
+    }
+  }
+  return value;
+}
+
+function isRetriableBridgeError(error) {
+  if (!(error instanceof RipBackendError)) return false;
+  if (error.code !== 'BRIDGE_UNAVAILABLE') return false;
+  const status = Number(error?.details?.status);
+  if (Number.isFinite(status) && status >= 500) return true;
+  const message = String(error.message || '').toLowerCase();
+  return message.includes('timeout') || message.includes('aborted') || message.includes('unavailable');
+}
+
+async function withRetry(task, { retries = 1, delayMs = 200 } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await task(attempt);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries || !isRetriableBridgeError(error)) throw error;
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
+}
+
 
 const ENGINE_STATE_VALUE_TO_NAME = Object.freeze({
   1: 'OFF',
@@ -395,7 +431,7 @@ class BridgeHttpAdapter {
       if (error instanceof RipBackendError) throw error;
       throw new RipBackendError('BRIDGE_UNAVAILABLE', `HTTP bridge unavailable for ${endpoint}: ${error.message}`, {
         endpoint,
-        remediation: `Start the configured backend and verify ${resolvedBaseUrl}/api/health (bridge) or ${resolvedBaseUrl}/health (adapter) responds.`
+        remediation: `Start the bridge backend and verify ${resolvedBaseUrl}/api/health responds.`
       });
     } finally {
       clearTimeout(timer);
@@ -448,15 +484,15 @@ class BridgeHttpAdapter {
     return this.request('POST', '/api/device/run-command', { command: payload.command, config: payload?.config || {} });
   }
 
-  async submitJob(payload) {
+  async ingestJob(payload) {
     validateSubmitPayload(payload || {});
 
-    const inputPath = firstDefinedString(
+    const inputPath = normalizeInputPath(firstDefinedString(
       payload?.inputPath,
       payload?.input_path,
       payload?.settings?.inputPath,
       payload?.settings?.input_path
-    );
+    ));
 
     if (!inputPath) {
       throw new RipBackendError('BACKEND_SUBMIT_INVALID_PAYLOAD', 'Missing input_path for RIP adapter submission.', {
@@ -464,34 +500,67 @@ class BridgeHttpAdapter {
       });
     }
 
-    const args = Array.isArray(payload?.args) ? payload.args.filter(arg => typeof arg === 'string' && arg.trim()) : [];
-    const env = payload?.env && typeof payload.env === 'object' ? payload.env : {};
+    const resolvedInputPath = path.isAbsolute(inputPath) ? inputPath : path.resolve(process.cwd(), inputPath);
+    if (!fs.existsSync(resolvedInputPath)) {
+      throw new RipBackendError('BACKEND_SUBMIT_INVALID_PAYLOAD', `Input file does not exist: ${resolvedInputPath}`, {
+        remediation: 'Re-select artwork in UI and retry so Electron sends a valid local filesystem path.'
+      });
+    }
 
-    const created = await this.request('POST', '/jobs', {
-      input_path: inputPath,
-      args,
-      env
-    }, { baseUrl: this.getAdapterBaseUrl() });
+    const copies = Number.isFinite(Number(payload?.copies))
+      ? Math.max(1, Math.floor(Number(payload.copies)))
+      : 1;
 
-    const jobId = firstDefinedString(created?.id, created?.jobId, payload?.jobId);
-    let status = firstDefinedString(created?.status, 'queued');
+    const ingest = await withRetry(() => this.request('POST', '/api/jobs/ingest', {
+      jobId: firstDefinedString(payload?.jobId) || undefined,
+      filePath: resolvedInputPath,
+      fileName: firstDefinedString(payload?.fileName) || path.basename(resolvedInputPath),
+      copies
+    }, { baseUrl: this.getBridgeBaseUrl() }), { retries: 1, delayMs: 250 });
 
-    if (jobId) {
-      try {
-        const latest = await this.request('GET', `/jobs/${jobId}`, undefined, { baseUrl: this.getAdapterBaseUrl() });
-        status = firstDefinedString(latest?.status, status);
-      } catch {
-        // Non-fatal: job was accepted already.
-      }
+    const bridgeJobId = firstDefinedString(ingest?.jobId, ingest?.id, payload?.jobId);
+    if (!bridgeJobId) {
+      throw new RipBackendError('BRIDGE_UNAVAILABLE', 'Bridge ingest did not return a job id.', {
+        remediation: 'Verify bridge /api/jobs/ingest response contract includes jobId.'
+      });
     }
 
     return {
       accepted: true,
-      status,
+      status: 'queued',
       message: null,
-      jobId: jobId || null,
+      jobId: bridgeJobId,
       timestamp: nowIso()
     };
+  }
+
+  async sendQueuedJob(payload) {
+    const bridgeJobId = firstDefinedString(payload?.bridgeJobId, payload?.jobId);
+    if (!bridgeJobId) {
+      throw new RipBackendError('BACKEND_SUBMIT_INVALID_PAYLOAD', 'Missing bridge job id for queued send.', {
+        remediation: 'Ingest/rasterize the PDF first, then send the queued bridge job id.'
+      });
+    }
+
+    const copies = Number.isFinite(Number(payload?.copies))
+      ? Math.max(1, Math.floor(Number(payload.copies)))
+      : 1;
+
+    const sent = await withRetry(() => this.request('POST', `/api/jobs/${bridgeJobId}/send`, { copies }, { baseUrl: this.getBridgeBaseUrl() }), { retries: 1, delayMs: 250 });
+    const finalStatus = firstDefinedString(sent?.state, sent?.status, 'completed');
+
+    return {
+      accepted: true,
+      status: finalStatus,
+      message: null,
+      jobId: bridgeJobId,
+      timestamp: nowIso()
+    };
+  }
+
+  async submitJob(payload) {
+    const staged = await this.ingestJob(payload);
+    return this.sendQueuedJob({ bridgeJobId: staged.jobId, copies: payload?.copies });
   }
 }
 
@@ -513,6 +582,14 @@ class BridgeUnavailableAdapter {
 
   async runCommand() {
     this.fail('run-command');
+  }
+
+  async ingestJob() {
+    this.fail('ingest-job');
+  }
+
+  async sendQueuedJob() {
+    this.fail('send-queued-job');
   }
 
   async submitJob() {
@@ -599,6 +676,32 @@ function createRipBackend({ mode = process.env.RIP_BACKEND_MODE || 'bridge-http'
         warnings: Array.isArray(result?.warnings) ? result.warnings : [],
         bridgeResult: result?.result || null,
         bridgeError: result?.error || null
+      };
+    },
+
+    async ingestJob(payload) {
+      validateSubmitPayload(payload || {});
+      validateLiveConfig(payload?.config || {});
+      const result = await adapter.ingestJob(payload || {});
+      return {
+        accepted: Boolean(result?.accepted),
+        status: result?.status || (result?.accepted ? 'queued' : 'rejected'),
+        message: result?.message || null,
+        jobId: result?.jobId || payload?.jobId || null,
+        timestamp: result?.timestamp || nowIso(),
+        source: `electron-${adapter.name}`
+      };
+    },
+
+    async sendQueuedJob(payload) {
+      const result = await adapter.sendQueuedJob(payload || {});
+      return {
+        accepted: Boolean(result?.accepted),
+        status: result?.status || (result?.accepted ? 'submitted' : 'rejected'),
+        message: result?.message || null,
+        jobId: result?.jobId || payload?.bridgeJobId || payload?.jobId || null,
+        timestamp: result?.timestamp || nowIso(),
+        source: `electron-${adapter.name}`
       };
     },
 

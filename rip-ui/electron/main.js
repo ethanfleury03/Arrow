@@ -104,6 +104,8 @@ function registerBridgeHandlers() {
   ipcMain.handle('rip:get-status', bridgeContract.getStatus);
   ipcMain.handle('rip:run-command', bridgeContract.runCommand);
   ipcMain.handle('rip:test-endpoint', bridgeContract.testEndpoint);
+  ipcMain.handle('rip:ingest-job', bridgeContract.ingestJob);
+  ipcMain.handle('rip:send-queued-job', bridgeContract.sendQueuedJob);
   ipcMain.handle('rip:submit-job', bridgeContract.submitJob);
   ipcMain.handle('rip:append-audit', bridgeContract.appendAudit);
 

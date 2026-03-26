@@ -364,7 +364,7 @@ class ThriftMemjetAdapter extends MemjetAdapter {
     return this._call('pausePrinting', [targetPage == null ? null : Number(targetPage)], jobId);
   }
 
-  async submitJobData({ jobId, artifactPath }) {
+  async submitJobData({ jobId, artifactPath, copies = 1 }) {
     if (!artifactPath) {
       throw new Error('No job artifact provided. Upload/ingest a test file first (POST /api/jobs/ingest).');
     }
@@ -375,7 +375,7 @@ class ThriftMemjetAdapter extends MemjetAdapter {
     await this._guardCommand('submitJobData');
 
     // Keep guarded until full JSL/raster path is complete.
-    return this._call('submitJobData', [{ jobId, artifactPath }], jobId);
+    return this._call('submitJobData', [{ jobId, artifactPath, copies }], jobId);
   }
 
   async prepareToPrint({ jobId, intendedSpeedIps }) {

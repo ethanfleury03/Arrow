@@ -6,7 +6,7 @@
     "deterministicSeed": 42
   },
   "rip": {
-    "host": "192.168.111.2",
+    "host": "192.168.111.1",
     "jobDataPort": 13001,
     "commandPort": 13002,
     "eventPort": 9231,

@@ -109,11 +109,50 @@ async function testGateEnforcementAndDryRunBehavior() {
     'preflight:false',
     'clearQueue',
     'initialiseEngine',
-    'prepareToPrint',
     'submitJobData',
+    'prepareToPrint',
     'startPrinting(simulated)',
     'finishPrinting'
   ]);
+}
+
+async function testSkipsInitialiseWhenEngineAlreadyOn() {
+  const calls = [];
+  const adapter = {
+    async checkConnectivity() { return { ok: true, diagnostics: { gates: { dryRunRealSequence: false } } }; },
+    async preflightFirstPrint() { return { passed: true, dryRun: false, checks: [], diagnostics: {} }; },
+    async clearQueue() { calls.push('clearQueue'); },
+    async initialiseEngine() {
+      calls.push('initialiseEngine');
+      throw new Error('MjException(errorCode=14, _message=\'Engine must be off\')');
+    },
+    async prepareToPrint() { calls.push('prepareToPrint'); },
+    async submitJobData() { calls.push('submitJobData'); },
+    async startPrinting() { calls.push('startPrinting'); },
+    async finishPrinting() { calls.push('finishPrinting'); },
+    async cancelJob() {}
+  };
+
+  const events = [];
+  const manager = new JobManager({
+    adapter,
+    logger: { info() {}, error() {} },
+    emit(type, payload) { events.push({ type, payload }); },
+    dataDir: '/tmp/rip-bridge-phase2-skip-init'
+  });
+
+  manager.createJob({ jobId: 'SKIP_INIT_OK', fileName: 'ok.gbor', artifactPath: __filename });
+  const sent = await manager.sendJob('SKIP_INIT_OK', { copies: 1 });
+  assert.equal(sent.state, 'completed');
+  assert.deepStrictEqual(calls, [
+    'clearQueue',
+    'initialiseEngine',
+    'submitJobData',
+    'prepareToPrint',
+    'startPrinting',
+    'finishPrinting'
+  ]);
+  assert.ok(events.some(e => e.type === 'job.send.step' && e.payload?.step === 'initialiseEngine:skipped'));
 }
 
 async function testPreflightFailureBlocksSend() {
@@ -161,6 +200,7 @@ async function testPreflightFailureBlocksSend() {
 async function run() {
   await testDeviceStatusDegradedAndPreflight();
   await testGateEnforcementAndDryRunBehavior();
+  await testSkipsInitialiseWhenEngineAlreadyOn();
   await testPreflightFailureBlocksSend();
   console.log('bridge-phase1.test: PASS');
 }

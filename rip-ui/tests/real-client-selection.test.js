@@ -10,11 +10,14 @@ function run() {
     MEMJET_REAL_BACKEND: 'auto',
     MEMJET_SSH_HOST: '10.0.0.2',
     MEMJET_SSH_USER: 'arrow',
-    MEMJET_SSH_KEY_PATH: '/tmp/key.pem',
-    MEMJET_SSH_REMOTE_CMD_TEMPLATE: '/opt/arrow/bin/memjet-bridge-op --op {operation}'
+    MEMJET_SSH_REMOTE_CMD_TEMPLATE: '/usr/local/bin/pesctl --op {operation}'
   });
   assert.equal(autoWithSsh.requestedBackend, 'auto');
-  assert.deepEqual(autoWithSsh.candidates, ['local', 'ssh']);
+  assert.deepEqual(autoWithSsh.candidates, ['ssh', 'local']);
+
+  const defaultSsh = selectBackendCandidates({});
+  assert.equal(defaultSsh.requestedBackend, 'ssh');
+  assert.deepEqual(defaultSsh.candidates, ['ssh']);
 
   const explicitLocal = selectBackendCandidates({ MEMJET_REAL_BACKEND: 'local' });
   assert.equal(explicitLocal.requestedBackend, 'local');

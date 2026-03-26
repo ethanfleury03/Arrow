@@ -15,7 +15,7 @@ function run() {
 
   const envProfile = loadRuntimeConfig({ env: { RIP_OPERATOR_PROFILE: 'kareela-lab' } });
   assert.equal(envProfile.backendMode, 'bridge-http');
-  assert.equal(envProfile.host, '192.168.111.2');
+  assert.equal(envProfile.host, '192.168.111.1');
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-config-'));
   const file = path.join(dir, 'runtime.json');

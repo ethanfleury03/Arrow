@@ -56,6 +56,26 @@ function createBridgeContract({ backend, logger = console }) {
       }
     },
 
+    async ingestJob(_event, payload) {
+      try {
+        return await backend.ingestJob(payload);
+      } catch (error) {
+        const bridgeError = toBridgeError(error);
+        logger.error('[rip:ingest-job] failed', { payload, ...bridgeError });
+        throw Object.assign(new Error(bridgeError.message), { bridgeError, timestamp: nowIso() });
+      }
+    },
+
+    async sendQueuedJob(_event, payload) {
+      try {
+        return await backend.sendQueuedJob(payload);
+      } catch (error) {
+        const bridgeError = toBridgeError(error);
+        logger.error('[rip:send-queued-job] failed', { payload, ...bridgeError });
+        throw Object.assign(new Error(bridgeError.message), { bridgeError, timestamp: nowIso() });
+      }
+    },
+
     async submitJob(_event, payload) {
       try {
         return await backend.submitJob(payload);

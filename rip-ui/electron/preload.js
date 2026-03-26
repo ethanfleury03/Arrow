@@ -56,6 +56,12 @@ contextBridge.exposeInMainWorld('ripBridge', {
   testEndpoint(endpoint) {
     return ipcRenderer.invoke('rip:test-endpoint', endpoint);
   },
+  ingestJob(payload) {
+    return ipcRenderer.invoke('rip:ingest-job', payload);
+  },
+  sendQueuedJob(payload) {
+    return ipcRenderer.invoke('rip:send-queued-job', payload);
+  },
   submitJob(payload) {
     return ipcRenderer.invoke('rip:submit-job', payload);
   },

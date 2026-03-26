@@ -34,6 +34,15 @@ const { execFile } = require('node:child_process');
 
 const execFileAsync = promisify(execFile);
 
+// Arrow production defaults (intentionally hardcoded for consistency).
+const ARROW_PES = Object.freeze({
+  host: '192.168.111.1',
+  commandPort: 13001,
+  eventPort: 9231,
+  dataPort: 13001,
+  sshHostKeyEd25519: 'ssh-ed25519 255 SHA256:Dt4YfNq2cxtaqz3ssSPh6RXw4rPVPzZoJ7cLkH2Tias'
+});
+
 function parseJsonSafe(value, fallback = null) {
   try {
     return JSON.parse(value);
@@ -101,15 +110,20 @@ function normalizePrintheadPositionEnum(rawPosition) {
 }
 
 function workspaceRoot() {
+  const configured = String(process.env.ARROW_ROOT || '').trim();
+  if (configured) return path.resolve(configured);
   return path.resolve(__dirname, '..');
 }
 
 function buildPythonPaths() {
   const root = workspaceRoot();
-  return [
+  const candidates = [
+    path.join(root, 'rip_consolidated_projects', 'development', 'pdl-source', 'kareela', 'py'),
+    path.join(root, 'rip_consolidated_projects', 'development', 'pdl-source', 'PDL', 'MJ6.5.0-2.el7'),
     path.join(root, '..', 'rip_consolidated_projects', 'development', 'pdl-source', 'kareela', 'py'),
     path.join(root, '..', 'rip_consolidated_projects', 'development', 'pdl-source', 'PDL', 'MJ6.5.0-2.el7')
   ];
+  return [...new Set(candidates.map(p => path.resolve(p)))];
 }
 
 function fileReadable(filePath) {
@@ -135,7 +149,10 @@ function normalizeJobId(input) {
 }
 
 function buildGborcatCommand({ host, dataPort, jobId, artifactPath }) {
-  const tool = process.env.MEMJET_GBORCAT_BIN || process.env.RIP_GBORCAT_BIN || 'gborcat';
+  const envTool = process.env.MEMJET_GBORCAT_BIN || process.env.RIP_GBORCAT_BIN;
+  const bundledWinTool = path.resolve(process.cwd(), 'runtime', 'bin', 'gborcat.exe');
+  const tool = envTool
+    || ((process.platform === 'win32' && fs.existsSync(bundledWinTool)) ? bundledWinTool : 'gborcat');
   const args = ['-h', String(host), '-c', '1', '-r', '1', '-j', String(jobId), '-v', String(artifactPath)];
 
   if (Number.isFinite(Number(dataPort)) && Number(dataPort) > 0 && String(process.env.MEMJET_GBORCAT_USE_PORT || '').trim() === '1') {
@@ -143,6 +160,191 @@ function buildGborcatCommand({ host, dataPort, jobId, artifactPath }) {
   }
 
   return { tool, args };
+}
+
+function getSubmitMode() {
+  // Default to memjet-rip so auto-send works out-of-the-box in Arrow monorepo.
+  return String(process.env.MEMJET_SUBMIT_MODE || 'memjet-rip').trim().toLowerCase();
+}
+
+function buildMemjetRipCommand({ artifactPath, host, dataPort, copies = 1 }) {
+  const repoRoot = path.resolve(process.cwd(), '..');
+  const configured = process.env.MEMJET_RIP_BIN || process.env.MEMJET_SUBMITTER_BIN || process.env.RIP_MEMJET_RIP_BIN;
+  const defaultWinBin = path.resolve(repoRoot, 'rip-core', 'src', 'build', 'Release', 'memjet-rip.exe');
+  const tool = configured || ((process.platform === 'win32' && fs.existsSync(defaultWinBin)) ? defaultWinBin : 'memjet-rip.exe');
+  const ripCoreRoot = process.env.MEMJET_RIP_ROOT || path.resolve(repoRoot, 'rip-core');
+  const defaultTempDir = path.resolve(ripCoreRoot, 'temp');
+  const tempDir = process.env.MEMJET_RIP_TEMP_DIR || process.env.MEMJET_SUBMIT_TEMP_DIR || defaultTempDir;
+  const jslConfigPath = process.env.JSL_CONFIG_PATH || path.resolve(ripCoreRoot, 'jsl-sdk', 'JslConfigs.xml');
+  const effectiveHost = ARROW_PES.host;
+  const effectiveDataPort = ARROW_PES.dataPort;
+  const args = [String(artifactPath), '--pes-ip', String(effectiveHost), '--pes-port', String(effectiveDataPort), '-v'];
+  return {
+    tool,
+    args,
+    tempDir,
+    ripCoreRoot,
+    jslConfigPath,
+    copies: Number.isFinite(Number(copies)) && Number(copies) > 0 ? Math.floor(Number(copies)) : 1
+  };
+}
+
+function isPrintedButTerminalAckTimedOut(stdout = '', stderr = '') {
+  const out = String(stdout || '');
+  const err = String(stderr || '');
+  const combined = `${out}\n${err}`;
+
+  const hadDataSubmit = /add_page_submit[\s\S]*"result":"OK"/.test(combined)
+    || /JSL_TRANSFER_COMPLETED/.test(combined)
+    || /phase_transition[\s\S]*"state_after":"TX_DONE"/.test(combined);
+  const hadStart = /guarded_start[\s\S]*"result":"OK"/.test(combined)
+    || /start_print_postcheck[\s\S]*"result":"OK"/.test(combined);
+  const hadBenignSessionCloseRace = /Print session must be active/i.test(combined)
+    || /cleanup_done[\s\S]*prepareToPrint blocked: engine not PRIMED_IDLE\/PRINT_READY/.test(combined);
+  const hadTerminalTimeout = /TERMINAL_PRINT_ACK_TIMEOUT/.test(combined)
+    || /Timed out waiting for terminal print completion state/i.test(combined)
+    || /WAIT_TERMINAL_STATE/.test(combined)
+    || /SESSION_COMPLETE_TIMEOUT/.test(combined)
+    || /wait_session_complete_after_start_timeout/.test(combined)
+    || /active_seen=true,\s*last=PRE_JOB/.test(combined);
+
+  return hadDataSubmit && ((hadStart && hadTerminalTimeout) || hadBenignSessionCloseRace);
+}
+
+async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, logger, requestedJobId = null, normalizedJobId = null, normalizedFlag = false }) {
+  const plan = buildMemjetRipCommand({ artifactPath, host, dataPort, copies });
+
+  if (process.platform === 'win32') {
+    try {
+      fs.mkdirSync(plan.tempDir, { recursive: true });
+    } catch {
+      // ignore; exec will surface errors if path is not usable
+    }
+  }
+
+  if (logger?.warn) {
+    logger.warn({
+      msg: 'memjet.submitJobData.memjet_rip',
+      tool: plan.tool,
+      args: plan.args,
+      tempDir: plan.tempDir,
+      jslConfigPath: plan.jslConfigPath,
+      ripCoreRoot: plan.ripCoreRoot,
+      copies: plan.copies,
+      host,
+      dataPort
+    });
+  }
+
+  // Production behavior: always use native Memjet multi-copy in a single submit.
+  // Do not software-loop copies here.
+  const forceCopyLoop = false;
+  const perRunCopies = (forceCopyLoop && plan.copies > 1) ? 1 : plan.copies;
+  const runs = (forceCopyLoop && plan.copies > 1) ? plan.copies : 1;
+  if (logger?.info) {
+    logger.info({
+      msg: 'memjet.submitJobData.copy_mode',
+      mode: runs > 1 ? 'software_loop' : 'native_single_submit',
+      requestedCopies: plan.copies,
+      perRunCopies,
+      runs
+    });
+  }
+  const loopGapMs = Number(process.env.MEMJET_COPY_LOOP_GAP_MS || 1500);
+  // Keep degraded gaps short by default so multi-copy jobs continue promptly.
+  // Can still be overridden via env when needed.
+  const degradedGapMs = Number(process.env.MEMJET_COPY_LOOP_DEGRADED_GAP_MS || 5000);
+
+  let lastStdout = '';
+  let lastStderr = '';
+
+  let degradedCount = 0;
+
+  for (let i = 0; i < runs; i += 1) {
+    let degradedThisRun = false;
+    if (logger?.info && runs > 1) {
+      logger.info({ msg: 'memjet.submitJobData.copy_loop', run: i + 1, runs, requestedCopies: plan.copies });
+    }
+
+    try {
+      const { stdout, stderr } = await execFileAsync(plan.tool, plan.args, {
+        cwd: plan.ripCoreRoot,
+        timeout: Number(process.env.MEMJET_SUBMIT_TIMEOUT_MS || 180000),
+        maxBuffer: 8 * 1024 * 1024,
+        env: {
+          ...process.env,
+          TEMP: plan.tempDir,
+          TMP: plan.tempDir,
+          JSL_CONFIG_PATH: plan.jslConfigPath,
+          JSL_NUM_COPIES: String(perRunCopies)
+        }
+      });
+
+      lastStdout = String(stdout || '').trim();
+      lastStderr = String(stderr || '').trim();
+    } catch (memjetErr) {
+      const stderr = String(memjetErr?.stderr || '').trim();
+      const stdout = String(memjetErr?.stdout || '').trim();
+      const code = memjetErr?.code ?? memjetErr?.signal ?? 'unknown';
+
+      if (!isPrintedButTerminalAckTimedOut(stdout, stderr)) {
+        throw new Error(`submitJobData memjet-rip failed (${code}). stdout=${stdout || 'n/a'} stderr=${stderr || 'n/a'}`);
+      }
+
+      degradedCount += 1;
+      degradedThisRun = true;
+      lastStdout = stdout;
+      lastStderr = stderr;
+      if (logger?.warn) {
+        logger.warn({
+          msg: 'memjet.submitJobData.memjet_rip.degraded_success',
+          reason: 'terminal_print_ack_timeout_after_successful_submit_and_start',
+          code,
+          run: i + 1,
+          runs,
+          requestedJobId,
+          effectiveJobId: normalizedJobId,
+          normalizedJobId: normalizedFlag
+        });
+      }
+    }
+
+    if (runs > 1 && i < runs - 1) {
+      const gapMs = degradedThisRun ? degradedGapMs : loopGapMs;
+      if (gapMs > 0) {
+        if (logger?.info) {
+          logger.info({
+            msg: 'memjet.submitJobData.copy_loop.wait',
+            nextRun: i + 2,
+            runs,
+            gapMs,
+            reason: degradedThisRun ? 'degraded_success_backoff' : 'normal_inter_copy_gap'
+          });
+        }
+        await new Promise(r => setTimeout(r, gapMs));
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    degraded: degradedCount > 0,
+    degradedReason: degradedCount > 0 ? 'terminal_print_ack_timeout_after_submit_start_ok' : undefined,
+    method: 'submitJobData',
+    fallback: 'memjet-rip',
+    lifecycleHandled: true,
+    submissionTool: plan.tool,
+    submissionArgs: plan.args,
+    requestedJobId,
+    effectiveJobId: normalizedJobId,
+    normalizedJobId: normalizedFlag,
+    copiesRequested: plan.copies,
+    copiesExecutionMode: runs > 1 ? 'loop' : 'single',
+    copiesCompleted: runs,
+    artifactPath,
+    stdout: lastStdout.slice(0, 4000),
+    stderr: lastStderr.slice(0, 4000)
+  };
 }
 
 function requiredEnv(name, value) {
@@ -155,21 +357,28 @@ function escapeSingleQuotes(value) {
 
 function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const env = process.env;
-  const backend = String(env.MEMJET_REAL_BACKEND || 'local').trim().toLowerCase();
-  const sshHost = String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || '').trim();
-  const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || '').trim();
-  const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || '').trim();
+  const backend = String(env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
+
+  // Hardcoded production target (requested): stable endpoint/user/pass.
+  const sshHost = ARROW_PES.host;
+  const sshUser = 'root';
+  const sshPassword = 'root';
+
+  const defaultUserKey = env.USERPROFILE ? `${env.USERPROFILE}\\.ssh\\id_ed25519` : '';
+  const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || defaultUserKey).trim();
   const sshPort = Number(env.MEMJET_SSH_PORT || env.RIP_SSH_PORT || 22);
   const sshBin = String(env.MEMJET_SSH_BIN || 'ssh').trim();
   const sshTimeoutMs = Number(env.MEMJET_SSH_TIMEOUT_MS || 30000);
-  const cmdTemplate = String(env.MEMJET_SSH_REMOTE_CMD_TEMPLATE || '').trim();
+  const cmdTemplate = String(
+    env.MEMJET_SSH_REMOTE_CMD_TEMPLATE
+      || '/usr/local/bin/pesctl --op {operation} --args-b64 {args_json_b64} --host {host} --command-port {commandPort} --event-port {eventPort} --data-port {dataPort}'
+  ).trim();
 
   const missing = [];
   if (backend === 'ssh') {
     [
       requiredEnv('MEMJET_SSH_HOST', sshHost),
       requiredEnv('MEMJET_SSH_USER', sshUser),
-      requiredEnv('MEMJET_SSH_KEY_PATH', sshKeyPath),
       requiredEnv('MEMJET_SSH_REMOTE_CMD_TEMPLATE', cmdTemplate)
     ].forEach(v => { if (v) missing.push(v); });
   }
@@ -178,6 +387,7 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
     backend,
     sshHost,
     sshUser,
+    sshPassword,
     sshKeyPath,
     sshPort,
     sshBin,
@@ -185,16 +395,45 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
     cmdTemplate,
     missing,
     defaultParams: {
-      host: String(host),
-      commandPort: String(commandPort),
-      eventPort: String(eventPort),
-      dataPort: String(dataPort)
+      host: String(ARROW_PES.host),
+      commandPort: String(ARROW_PES.commandPort),
+      eventPort: String(ARROW_PES.eventPort),
+      dataPort: String(ARROW_PES.dataPort)
     }
   };
 }
 
 function interpolateTemplate(template, vars) {
   return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_, key) => (key in vars ? String(vars[key]) : ''));
+}
+
+function resolveBundledPlinkPath() {
+  const envPath = String(process.env.MEMJET_PLINK_PATH || '').trim();
+  if (envPath && fs.existsSync(envPath)) return envPath;
+
+  const candidates = [
+    path.resolve(process.cwd(), 'bin', 'plink.exe'),
+    path.resolve(__dirname, '..', 'bin', 'plink.exe'),
+    path.resolve(process.resourcesPath || '', 'bin', 'plink.exe')
+  ].filter(Boolean);
+
+  return candidates.find(candidate => {
+    try {
+      return fs.existsSync(candidate);
+    } catch {
+      return false;
+    }
+  }) || null;
+}
+
+async function hasPlinkInPath() {
+  try {
+    const cmd = process.platform === 'win32' ? 'where' : 'which';
+    await execFileAsync(cmd, ['plink'], { timeout: 5000, maxBuffer: 256 * 1024 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function runSshOperation({ settings, operation, payload, logger }) {
@@ -217,10 +456,11 @@ async function runSshOperation({ settings, operation, payload, logger }) {
   }
 
   const sshArgs = [
-    '-o', 'BatchMode=yes',
+    '-o', 'BatchMode=no',
     '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'PreferredAuthentications=password,keyboard-interactive,publickey',
     '-p', String(settings.sshPort),
-    '-i', settings.sshKeyPath,
+    ...(settings.sshKeyPath ? ['-i', settings.sshKeyPath] : []),
     `${settings.sshUser}@${settings.sshHost}`,
     remoteCommand
   ];
@@ -240,10 +480,34 @@ async function runSshOperation({ settings, operation, payload, logger }) {
   let stdout = '';
   let stderr = '';
   try {
-    const run = await execFileAsync(settings.sshBin, sshArgs, {
-      timeout: settings.sshTimeoutMs,
-      maxBuffer: 8 * 1024 * 1024
-    });
+    let run;
+    if (process.platform === 'win32' && settings.sshPassword) {
+      const bundledPlink = resolveBundledPlinkPath();
+      const hasPathPlink = await hasPlinkInPath();
+      const plinkBin = bundledPlink || (hasPathPlink ? 'plink' : null);
+      if (!plinkBin) {
+        throw new Error('Windows password SSH requires plink. Add bin/plink.exe (vendored) or install PuTTY/plink in PATH.');
+      }
+
+      run = await execFileAsync(plinkBin, [
+        '-batch',
+        '-hostkey', ARROW_PES.sshHostKeyEd25519,
+        '-P', String(settings.sshPort),
+        '-l', settings.sshUser,
+        '-pw', settings.sshPassword,
+        settings.sshHost,
+        remoteCommand
+      ], {
+        timeout: settings.sshTimeoutMs,
+        maxBuffer: 8 * 1024 * 1024
+      });
+    } else {
+      run = await execFileAsync(settings.sshBin, sshArgs, {
+        timeout: settings.sshTimeoutMs,
+        maxBuffer: 8 * 1024 * 1024
+      });
+    }
+
     stdout = String(run.stdout || '').trim();
     stderr = String(run.stderr || '').trim();
   } catch (error) {
@@ -488,7 +752,7 @@ async function createLocalClient({ host, commandPort, dataPort, protocol, transp
     pausePrinting: async targetPage => call('pausePrinting', [targetPage == null ? null : Number(targetPage)]),
     prepareToPrint: async ips => call('prepareToPrint', [Number(ips)]),
 
-    submitJobData: async ({ jobId, artifactPath } = {}) => {
+    submitJobData: async ({ jobId, artifactPath, copies = 1 } = {}) => {
       const resolvedArtifact = artifactPath ? path.resolve(String(artifactPath)) : null;
       if (!resolvedArtifact) {
         throw new Error('submitJobData requires artifactPath');
@@ -498,6 +762,20 @@ async function createLocalClient({ host, commandPort, dataPort, protocol, transp
       }
 
       const normalized = normalizeJobId(jobId);
+      const submitMode = getSubmitMode();
+      if (submitMode === 'memjet-rip') {
+        return runMemjetRipSubmit({
+          artifactPath: resolvedArtifact,
+          host,
+          dataPort,
+          logger,
+          requestedJobId: jobId || null,
+          normalizedJobId: normalized.jobId,
+          normalizedFlag: normalized.normalized,
+          copies
+        });
+      }
+
       const plan = buildGborcatCommand({
         host,
         dataPort,
@@ -577,6 +855,64 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
 
   const call = async (operation, payload = {}) => runSshOperation({ settings, operation, payload, logger });
 
+  let submitChain = Promise.resolve();
+  let lastSubmitFinishedAt = 0;
+
+  const extractStatusSnapshot = (statusResult = {}) => {
+    const output = String(statusResult?.output || '');
+    const raw = /"raw"\s*:\s*"([\s\S]*?)"\s*,\s*"queueLen"/m.exec(output)?.[1] || output;
+    const queueLenFromJson = Number(statusResult?.queueLen);
+    const queueLenFromRaw = Number((/queueLen"\s*:\s*(\d+)/.exec(output) || [])[1]);
+    const queueLen = Number.isFinite(queueLenFromJson)
+      ? queueLenFromJson
+      : (Number.isFinite(queueLenFromRaw) ? queueLenFromRaw : null);
+    const stateCode = Number((/state=(\d+)/.exec(raw) || [])[1]);
+    const readyMatch = /isReadyForPrintData=(true|false)/.exec(raw);
+    const isReadyForPrintData = readyMatch ? readyMatch[1] === 'true' : null;
+    return {
+      queueLen,
+      stateCode: Number.isFinite(stateCode) ? stateCode : null,
+      isReadyForPrintData,
+      raw: raw.slice(0, 1000)
+    };
+  };
+
+  const waitForSubmitWindow = async () => {
+    const minGapMs = Number(process.env.MEMJET_SUBMIT_MIN_GAP_MS || 4000);
+    const maxWaitMs = Number(process.env.MEMJET_SUBMIT_READY_TIMEOUT_MS || 45000);
+    const start = Date.now();
+
+    while (Date.now() - start < maxWaitMs) {
+      const elapsedSinceLast = Date.now() - lastSubmitFinishedAt;
+      if (lastSubmitFinishedAt > 0 && elapsedSinceLast < minGapMs) {
+        await new Promise(r => setTimeout(r, 500));
+        continue;
+      }
+
+      const status = await call('getStatus', {});
+      const snap = extractStatusSnapshot(status);
+      const queueEmpty = snap.queueLen === 0;
+      const stateOk = snap.stateCode == null || [4, 6, 7].includes(snap.stateCode);
+      if (queueEmpty && stateOk) {
+        return;
+      }
+
+      if (logger?.info) {
+        logger.info({
+          msg: 'memjet.submitJobData.wait_for_window',
+          queueLen: snap.queueLen,
+          stateCode: snap.stateCode,
+          isReadyForPrintData: snap.isReadyForPrintData
+        });
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    if (logger?.warn) {
+      logger.warn({ msg: 'memjet.submitJobData.wait_for_window.timeout', timeoutMs: maxWaitMs });
+    }
+  };
+
   return {
     async getStatus() {
       return call('getStatus', {});
@@ -601,24 +937,113 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
     pausePrinting: async targetPage => call('pausePrinting', { targetPage: targetPage == null ? null : Number(targetPage) }),
     prepareToPrint: async ips => call('prepareToPrint', { intendedSpeedIps: Number(ips) }),
 
-    submitJobData: async ({ jobId, artifactPath } = {}) => {
-      const resolvedArtifact = artifactPath ? path.resolve(String(artifactPath)) : null;
-      if (!resolvedArtifact) {
-        throw new Error('submitJobData requires artifactPath');
-      }
-      if (!fs.existsSync(resolvedArtifact) || !fileReadable(resolvedArtifact)) {
-        throw new Error(`submitJobData artifact is missing/unreadable: ${resolvedArtifact}`);
-      }
+    submitJobData: async ({ jobId, artifactPath, copies = 1 } = {}) => {
+      const runOnce = async () => {
+        const resolvedArtifact = artifactPath ? path.resolve(String(artifactPath)) : null;
+        if (!resolvedArtifact) {
+          throw new Error('submitJobData requires artifactPath');
+        }
+        if (!fs.existsSync(resolvedArtifact) || !fileReadable(resolvedArtifact)) {
+          throw new Error(`submitJobData artifact is missing/unreadable: ${resolvedArtifact}`);
+        }
 
-      const normalized = normalizeJobId(jobId);
-      return call('submitJobData', {
-        jobId: normalized.jobId,
-        requestedJobId: jobId || null,
-        normalizedJobId: normalized.normalized,
-        artifactPath: resolvedArtifact,
-        host: String(host),
-        dataPort: Number(dataPort)
+        await waitForSubmitWindow();
+
+        const normalized = normalizeJobId(jobId);
+        const submitMode = getSubmitMode();
+        if (submitMode === 'memjet-rip') {
+          return runMemjetRipSubmit({
+            artifactPath: resolvedArtifact,
+            host,
+            dataPort,
+            logger,
+            requestedJobId: jobId || null,
+            normalizedJobId: normalized.jobId,
+            normalizedFlag: normalized.normalized,
+            copies
+          });
+        }
+
+        try {
+          return await call('submitJobData', {
+            jobId: normalized.jobId,
+            requestedJobId: jobId || null,
+            normalizedJobId: normalized.normalized,
+            artifactPath: resolvedArtifact,
+            host: String(host),
+            dataPort: Number(dataPort)
+          });
+        } catch (error) {
+          const msg = String(error?.message || '');
+          const allowFallback = String(process.env.MEMJET_SSH_SUBMIT_FALLBACK_LOCAL_GBORCAT || '1').trim() !== '0';
+          if (!allowFallback || !/unsupported_op/i.test(msg) || !/submitJobData/i.test(msg)) {
+            throw error;
+          }
+
+          if (String(process.env.MEMJET_SSH_SUBMIT_FALLBACK_MEMJET_RIP || '1').trim() !== '0') {
+            return runMemjetRipSubmit({
+              artifactPath: resolvedArtifact,
+              host,
+              dataPort,
+              logger,
+              requestedJobId: jobId || null,
+              normalizedJobId: normalized.jobId,
+              normalizedFlag: normalized.normalized,
+              copies
+            });
+          }
+
+          const plan = buildGborcatCommand({
+            host,
+            dataPort,
+            jobId: normalized.jobId,
+            artifactPath: resolvedArtifact
+          });
+
+          if (logger?.warn) {
+            logger.warn({
+              msg: 'memjet.submitJobData.fallback_local_gborcat',
+              reason: 'remote_pesctl_unsupported_op',
+              tool: plan.tool,
+              args: plan.args,
+              host,
+              dataPort
+            });
+          }
+
+          try {
+            const { stdout, stderr } = await execFileAsync(plan.tool, plan.args, {
+              timeout: Number(process.env.MEMJET_SUBMIT_TIMEOUT_MS || 30000),
+              maxBuffer: 4 * 1024 * 1024
+            });
+
+            return {
+              ok: true,
+              method: 'submitJobData',
+              fallback: 'local-gborcat',
+              submissionTool: plan.tool,
+              submissionArgs: plan.args,
+              requestedJobId: jobId || null,
+              effectiveJobId: normalized.jobId,
+              normalizedJobId: normalized.normalized,
+              artifactPath: resolvedArtifact,
+              stdout: String(stdout || '').trim().slice(0, 4000),
+              stderr: String(stderr || '').trim().slice(0, 4000)
+            };
+          } catch (gborErr) {
+            const stderr = String(gborErr?.stderr || '').trim();
+            const stdout = String(gborErr?.stdout || '').trim();
+            const code = gborErr?.code ?? gborErr?.signal ?? 'unknown';
+            throw new Error(`submitJobData fallback gborcat failed (${code}). stdout=${stdout || 'n/a'} stderr=${stderr || 'n/a'}`);
+          }
+        }
+      };
+
+      const chained = submitChain.then(runOnce, runOnce);
+      submitChain = chained.finally(() => {
+        lastSubmitFinishedAt = Date.now();
       });
+      return submitChain;
     },
 
     startPrinting: async () => call('startPrinting', {}),
@@ -632,15 +1057,14 @@ function isSshConfigured(env = process.env) {
   return Boolean(
     String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || '').trim() &&
     String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || '').trim() &&
-    String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || '').trim() &&
     String(env.MEMJET_SSH_REMOTE_CMD_TEMPLATE || '').trim()
   );
 }
 
 function selectBackendCandidates(env = process.env) {
-  const requestedBackend = String(env.MEMJET_REAL_BACKEND || 'auto').trim().toLowerCase();
+  const requestedBackend = String(env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
   const candidates = requestedBackend === 'auto'
-    ? (isSshConfigured(env) ? ['local', 'ssh'] : ['local'])
+    ? (isSshConfigured(env) ? ['ssh', 'local'] : ['local'])
     : [requestedBackend];
   return { requestedBackend, candidates };
 }
