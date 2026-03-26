@@ -1,7 +1,6 @@
 const STORAGE_KEY = 'rip-ui-prototype-state-v1';
 const DESIGNS_STORAGE_KEY = 'rip-ui-prototype-3d-designs-v1';
 const MAX_DESIGN_LABEL_FILE_BYTES = 2 * 1024 * 1024;
-const UI_BUILD_STAMP = 'a86c725-inkdiag';
 
 const OBJECT_TEMPLATE_REGISTRY = [
   { id: 'box', label: 'Box' }
@@ -1242,7 +1241,7 @@ function render() {
     const liveMode = state.liveStatus.source === 'bridge-http';
     const modeLabel = liveMode ? 'LIVE MODE (HTTP BRIDGE)' : 'LIVE BACKEND DOWN';
     const lock = isDiscoveryReadOnlyMode() ? ' · DISCOVERY-LOCK' : '';
-    modeBadge.textContent = `${modeLabel}${lock} · ${state.config.operatorProfile} · ${state.config.host}:${state.config.commandPort} · build:${UI_BUILD_STAMP}`;
+    modeBadge.textContent = `${modeLabel}${lock} · ${state.config.operatorProfile} · ${state.config.host}:${state.config.commandPort}`;
   }
 
   const liveStatusEl = document.getElementById('liveStatusCards');
