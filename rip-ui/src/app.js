@@ -3603,6 +3603,16 @@ function resolveEngineState(status = {}) {
 }
 
 function parseInkLevelsFromStatus(status = {}) {
+  const direct = status?.inkLevels;
+  if (direct && typeof direct === 'object') {
+    return {
+      C: Math.max(0, Math.min(100, Number(direct.C) || 0)),
+      M: Math.max(0, Math.min(100, Number(direct.M) || 0)),
+      Y: Math.max(0, Math.min(100, Number(direct.Y) || 0)),
+      K: Math.max(0, Math.min(100, Number(direct.K) || 0))
+    };
+  }
+
   const details = status?.details || {};
   const output = String(details?.productInfo?.output || '');
   if (!output) return { C: 0, M: 0, Y: 0, K: 0 };

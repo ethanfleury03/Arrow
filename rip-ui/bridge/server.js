@@ -158,6 +158,31 @@ function extractEmbeddedJsonRawFromOutput(text) {
   return null;
 }
 
+function extractInkLevels(status = {}) {
+  const details = status?.details || {};
+  const output = String(details?.productInfo?.output || '');
+  if (!output) return { C: 0, M: 0, Y: 0, K: 0 };
+
+  const byColor = {};
+  const tankRegex = /InkTankStatus\(([^)]*)\)/g;
+  let match;
+  while ((match = tankRegex.exec(output)) !== null) {
+    const chunk = match[1] || '';
+    const cap = Number((/inkCapacity\s*=\s*([0-9.]+)/i.exec(chunk) || [])[1]);
+    const rem = Number((/inkRemaining\s*=\s*([0-9.]+)/i.exec(chunk) || [])[1]);
+    const color = Number((/color\s*=\s*(\d+)/i.exec(chunk) || [])[1]);
+    if (!Number.isFinite(cap) || cap <= 0 || !Number.isFinite(rem) || !Number.isInteger(color)) continue;
+    byColor[color] = Math.max(0, Math.min(100, Math.round((rem / cap) * 100)));
+  }
+
+  return {
+    C: Number.isFinite(byColor[1]) ? byColor[1] : 0,
+    M: Number.isFinite(byColor[2]) ? byColor[2] : 0,
+    Y: Number.isFinite(byColor[3]) ? byColor[3] : 0,
+    K: Number.isFinite(byColor[4]) ? byColor[4] : 0
+  };
+}
+
 function resolveEngineState(status = {}) {
   const details = status?.details || {};
   const productInfo = details?.productInfo || {};
@@ -297,6 +322,7 @@ function createBridgeServer(options = {}) {
       engineStateRawLabel: resolved.rawLabel,
       engineStateCanonical: resolved.canonical,
       queueLength: Number(details?.queueLength || 0),
+      inkLevels: extractInkLevels(status),
       connected: Boolean(status?.connected),
       degraded: Boolean(status?.degraded),
       source: 'bridge-http',
@@ -340,6 +366,7 @@ function createBridgeServer(options = {}) {
         engineStateRawNumeric: snapshot.engineStateRawNumeric,
         engineStateRawLabel: snapshot.engineStateRawLabel,
         queueLength: snapshot.queueLength,
+        inkLevels: snapshot.inkLevels,
         connected: snapshot.connected,
         degraded: snapshot.degraded
       });
@@ -355,6 +382,7 @@ function createBridgeServer(options = {}) {
         engineStateRawLabel: 'UNKNOWN',
         engineStateCanonical: 'UNKNOWN',
         queueLength: 0,
+        inkLevels: { C: 0, M: 0, Y: 0, K: 0 },
         connected: false,
         degraded: true,
         source: 'bridge-http',
