@@ -34,6 +34,14 @@ const { execFile } = require('node:child_process');
 
 const execFileAsync = promisify(execFile);
 
+// Arrow production defaults (intentionally hardcoded for consistency).
+const ARROW_PES = Object.freeze({
+  host: '192.168.111.1',
+  commandPort: 13001,
+  eventPort: 9231,
+  dataPort: 13001
+});
+
 function parseJsonSafe(value, fallback = null) {
   try {
     return JSON.parse(value);
@@ -165,7 +173,9 @@ function buildMemjetRipCommand({ artifactPath, host, dataPort }) {
   const tool = configured || ((process.platform === 'win32' && fs.existsSync(defaultWinBin)) ? defaultWinBin : 'memjet-rip.exe');
   const defaultTempDir = path.resolve(repoRoot, 'rip-core', 'temp');
   const tempDir = process.env.MEMJET_RIP_TEMP_DIR || process.env.MEMJET_SUBMIT_TEMP_DIR || defaultTempDir;
-  const args = [String(artifactPath), '--pes-ip', String(host), '--pes-port', String(Number(dataPort) || 13001), '-v'];
+  const effectiveHost = ARROW_PES.host;
+  const effectiveDataPort = ARROW_PES.dataPort;
+  const args = [String(artifactPath), '--pes-ip', String(effectiveHost), '--pes-port', String(effectiveDataPort), '-v'];
   return { tool, args, tempDir };
 }
 
@@ -235,8 +245,8 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const env = process.env;
   const backend = String(env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
 
-  // Hardcoded production target (requested): this endpoint/user/pass is treated as stable.
-  const sshHost = '192.168.100.200';
+  // Hardcoded production target (requested): stable endpoint/user/pass.
+  const sshHost = ARROW_PES.host;
   const sshUser = 'root';
   const sshPassword = 'root';
 
@@ -271,10 +281,10 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
     cmdTemplate,
     missing,
     defaultParams: {
-      host: String(host),
-      commandPort: String(commandPort),
-      eventPort: String(eventPort),
-      dataPort: String(dataPort)
+      host: String(ARROW_PES.host),
+      commandPort: String(ARROW_PES.commandPort),
+      eventPort: String(ARROW_PES.eventPort),
+      dataPort: String(ARROW_PES.dataPort)
     }
   };
 }
