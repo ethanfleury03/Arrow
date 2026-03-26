@@ -39,7 +39,7 @@ function loadBridgeConfig(env = process.env) {
 
   // MEMJET_TARGET_* is the forced/locked target override and always wins when set.
   const targetHost = pickString(env.MEMJET_TARGET_HOST, env.MEMJET_HOST, '192.168.100.200');
-  const targetCommandPort = pickNumber([env.MEMJET_TARGET_COMMAND_PORT, env.MEMJET_COMMAND_PORT], 13002);
+  const targetCommandPort = pickNumber([env.MEMJET_TARGET_COMMAND_PORT, env.MEMJET_COMMAND_PORT], 13001);
   const targetEventPort = pickNumber([env.MEMJET_TARGET_EVENT_PORT, env.MEMJET_EVENT_PORT], 9231);
   const targetDataPort = pickNumber([env.MEMJET_TARGET_DATA_PORT, env.MEMJET_DATA_PORT], 13001);
 

@@ -11,9 +11,9 @@
   - `prepareToPrint` → `prepareToPrint`
   - `startPrinting` / `finishPrinting`
 - Strict safety gates:
-  - `RIP_BRIDGE_ENABLE_REAL_COMMANDS` (default `false`)
-  - `RIP_BRIDGE_ENABLE_REAL_START_PRINT` (default `false`)
-  - `RIP_BRIDGE_REAL_DRY_RUN` (default `true`, blocks physical `startPrinting`)
+  - `RIP_BRIDGE_ENABLE_REAL_COMMANDS` (default `true`)
+  - `RIP_BRIDGE_ENABLE_REAL_START_PRINT` (default `true`)
+  - `RIP_BRIDGE_REAL_DRY_RUN` (default `false`, physical `startPrinting` allowed when real start gate is enabled)
 - `POST /api/device/preflight` added for first-print readiness checklist.
 - `/api/device/status` now reports:
   - gate state
@@ -57,12 +57,12 @@ export RIP_BRIDGE_PORT=8787
 # kareela endpoint defaults discovered in lab
 export MEMJET_MODE=real
 export MEMJET_HOST=192.168.111.2
-export MEMJET_COMMAND_PORT=13002
+export MEMJET_COMMAND_PORT=13001
 export MEMJET_EVENT_PORT=9231
 export MEMJET_DATA_PORT=13001
 # optional forced override (highest precedence; useful when UI/runtime profile is locked)
 # export MEMJET_TARGET_HOST=192.168.111.2
-# export MEMJET_TARGET_COMMAND_PORT=13002
+# export MEMJET_TARGET_COMMAND_PORT=13001
 # export MEMJET_TARGET_EVENT_PORT=9231
 # export MEMJET_TARGET_DATA_PORT=13001
 export MEMJET_PROTOCOL=thrift-compact

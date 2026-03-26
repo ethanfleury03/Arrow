@@ -159,6 +159,10 @@ npm run bridge:start
   - `MEMJET_REAL_BACKEND=local` (default, existing local Python+gborcat path)
   - `MEMJET_REAL_BACKEND=ssh` (remote Linux wrapper over SSH; see `docs/RIP_BRIDGE_V1.md` for required env)
 - UI Send Job is bridge-only via `POST /api/jobs/ingest` then `POST /api/jobs/:jobId/send`; bridge errors are surfaced directly (no adapter `/jobs` fallback).
+- Windows deterministic launch helpers:
+  - `scripts/start-bridge.cmd` (sets canonical env + starts bridge)
+  - `scripts/verify-runtime.cmd` (checks Node + gborcat runtime dependencies)
+  - Deployment notes: `docs/DEPLOY_WINDOWS.md`
 - Printhead/maintenance controls (cleaning, priming/depriming, wipers, cap/raise/printhead motion, pause/start/finish) require host network reachability to the Kareela PES command endpoint (`host:commandPort`). If unreachable (for example on this Mac mini), commands fail closed with actionable errors; they are intended to run on the Windows host connected to the printer.
 
 ## Deterministic checks
