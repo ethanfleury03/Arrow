@@ -182,6 +182,23 @@ function buildMemjetRipCommand({ artifactPath, host, dataPort }) {
   return { tool, args, tempDir, ripCoreRoot, jslConfigPath };
 }
 
+function isPrintedButTerminalAckTimedOut(stdout = '', stderr = '') {
+  const out = String(stdout || '');
+  const err = String(stderr || '');
+  const combined = `${out}\n${err}`;
+
+  const hadDataSubmit = /add_page_submit[\s\S]*"result":"OK"/.test(combined)
+    || /JSL_TRANSFER_COMPLETED/.test(combined)
+    || /phase_transition[\s\S]*"state_after":"TX_DONE"/.test(combined);
+  const hadStart = /guarded_start[\s\S]*"result":"OK"/.test(combined)
+    || /start_print_postcheck[\s\S]*"result":"OK"/.test(combined);
+  const hadTerminalTimeout = /TERMINAL_PRINT_ACK_TIMEOUT/.test(combined)
+    || /Timed out waiting for terminal print completion state/i.test(combined)
+    || /WAIT_TERMINAL_STATE/.test(combined);
+
+  return hadDataSubmit && hadStart && hadTerminalTimeout;
+}
+
 async function runMemjetRipSubmit({ artifactPath, host, dataPort, logger, requestedJobId = null, normalizedJobId = null, normalizedFlag = false }) {
   const plan = buildMemjetRipCommand({ artifactPath, host, dataPort });
 
@@ -236,6 +253,36 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, logger, reques
     const stderr = String(memjetErr?.stderr || '').trim();
     const stdout = String(memjetErr?.stdout || '').trim();
     const code = memjetErr?.code ?? memjetErr?.signal ?? 'unknown';
+
+    if (isPrintedButTerminalAckTimedOut(stdout, stderr)) {
+      if (logger?.warn) {
+        logger.warn({
+          msg: 'memjet.submitJobData.memjet_rip.degraded_success',
+          reason: 'terminal_print_ack_timeout_after_successful_submit_and_start',
+          code,
+          requestedJobId,
+          effectiveJobId: normalizedJobId,
+          normalizedJobId: normalizedFlag
+        });
+      }
+
+      return {
+        ok: true,
+        degraded: true,
+        degradedReason: 'terminal_print_ack_timeout_after_submit_start_ok',
+        method: 'submitJobData',
+        fallback: 'memjet-rip',
+        submissionTool: plan.tool,
+        submissionArgs: plan.args,
+        requestedJobId,
+        effectiveJobId: normalizedJobId,
+        normalizedJobId: normalizedFlag,
+        artifactPath,
+        stdout: stdout.slice(0, 4000),
+        stderr: stderr.slice(0, 4000)
+      };
+    }
+
     throw new Error(`submitJobData memjet-rip failed (${code}). stdout=${stdout || 'n/a'} stderr=${stderr || 'n/a'}`);
   }
 }
