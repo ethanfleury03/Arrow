@@ -236,7 +236,9 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, lo
     });
   }
 
-  const forceCopyLoop = String(process.env.MEMJET_FORCE_COPY_LOOP || '1').trim() !== '0';
+  // Default OFF: let Memjet pipeline handle multi-copy in one continuous run.
+  // Set MEMJET_FORCE_COPY_LOOP=1 only for fallback troubleshooting.
+  const forceCopyLoop = String(process.env.MEMJET_FORCE_COPY_LOOP || '0').trim() !== '0';
   const perRunCopies = (forceCopyLoop && plan.copies > 1) ? 1 : plan.copies;
   const runs = (forceCopyLoop && plan.copies > 1) ? plan.copies : 1;
   const loopGapMs = Number(process.env.MEMJET_COPY_LOOP_GAP_MS || 1500);
