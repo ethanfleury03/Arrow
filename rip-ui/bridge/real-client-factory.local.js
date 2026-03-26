@@ -154,14 +154,17 @@ function buildGborcatCommand({ host, dataPort, jobId, artifactPath }) {
 }
 
 function getSubmitMode() {
-  return String(process.env.MEMJET_SUBMIT_MODE || '').trim().toLowerCase();
+  // Default to memjet-rip so auto-send works out-of-the-box in Arrow monorepo.
+  return String(process.env.MEMJET_SUBMIT_MODE || 'memjet-rip').trim().toLowerCase();
 }
 
 function buildMemjetRipCommand({ artifactPath, host, dataPort }) {
+  const repoRoot = path.resolve(process.cwd(), '..');
   const configured = process.env.MEMJET_RIP_BIN || process.env.MEMJET_SUBMITTER_BIN || process.env.RIP_MEMJET_RIP_BIN;
-  const defaultWinBin = path.resolve(process.cwd(), '..', 'rip-core', 'src', 'build', 'Release', 'memjet-rip.exe');
+  const defaultWinBin = path.resolve(repoRoot, 'rip-core', 'src', 'build', 'Release', 'memjet-rip.exe');
   const tool = configured || ((process.platform === 'win32' && fs.existsSync(defaultWinBin)) ? defaultWinBin : 'memjet-rip.exe');
-  const tempDir = process.env.MEMJET_RIP_TEMP_DIR || process.env.MEMJET_SUBMIT_TEMP_DIR || 'C:\\ArrowRip\\temp';
+  const defaultTempDir = path.resolve(repoRoot, 'rip-core', 'temp');
+  const tempDir = process.env.MEMJET_RIP_TEMP_DIR || process.env.MEMJET_SUBMIT_TEMP_DIR || defaultTempDir;
   const args = [String(artifactPath), '--pes-ip', String(host), '--pes-port', String(Number(dataPort) || 13001), '-v'];
   return { tool, args, tempDir };
 }
