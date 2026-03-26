@@ -174,7 +174,7 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const sshTimeoutMs = Number(env.MEMJET_SSH_TIMEOUT_MS || 30000);
   const cmdTemplate = String(
     env.MEMJET_SSH_REMOTE_CMD_TEMPLATE
-      || '/opt/arrow/bin/memjet-bridge-op --op {operation} --args-b64 {args_json_b64} --host {host} --command-port {commandPort} --event-port {eventPort} --data-port {dataPort}'
+      || '/usr/local/bin/pesctl --op {operation} --args-b64 {args_json_b64} --host {host} --command-port {commandPort} --event-port {eventPort} --data-port {dataPort}'
   ).trim();
 
   const missing = [];
@@ -208,6 +208,16 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
 
 function interpolateTemplate(template, vars) {
   return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_, key) => (key in vars ? String(vars[key]) : ''));
+}
+
+async function hasPlinkInPath() {
+  try {
+    const cmd = process.platform === 'win32' ? 'where' : 'which';
+    await execFileAsync(cmd, ['plink'], { timeout: 5000, maxBuffer: 256 * 1024 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function runSshOperation({ settings, operation, payload, logger }) {
@@ -256,24 +266,22 @@ async function runSshOperation({ settings, operation, payload, logger }) {
   try {
     let run;
     if (process.platform === 'win32' && settings.sshPassword) {
-      try {
-        run = await execFileAsync('plink', [
-          '-batch',
-          '-P', String(settings.sshPort),
-          '-l', settings.sshUser,
-          '-pw', settings.sshPassword,
-          settings.sshHost,
-          remoteCommand
-        ], {
-          timeout: settings.sshTimeoutMs,
-          maxBuffer: 8 * 1024 * 1024
-        });
-      } catch (plinkErr) {
-        run = await execFileAsync(settings.sshBin, sshArgs, {
-          timeout: settings.sshTimeoutMs,
-          maxBuffer: 8 * 1024 * 1024
-        });
+      const hasPlink = await hasPlinkInPath();
+      if (!hasPlink) {
+        throw new Error('Windows password SSH requires plink in PATH. Install PuTTY/plink or configure SSH key auth.');
       }
+
+      run = await execFileAsync('plink', [
+        '-batch',
+        '-P', String(settings.sshPort),
+        '-l', settings.sshUser,
+        '-pw', settings.sshPassword,
+        settings.sshHost,
+        remoteCommand
+      ], {
+        timeout: settings.sshTimeoutMs,
+        maxBuffer: 8 * 1024 * 1024
+      });
     } else {
       run = await execFileAsync(settings.sshBin, sshArgs, {
         timeout: settings.sshTimeoutMs,
