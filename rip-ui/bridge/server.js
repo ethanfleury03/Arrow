@@ -356,6 +356,7 @@ function createBridgeServer(options = {}) {
           rawEngine: status?.engine,
           rawProductInfo: status?.details?.productInfo || null,
           mappedEngineState: snapshot.engineState,
+          inkLevels: snapshot.inkLevels,
           connected: snapshot.connected,
           degraded: snapshot.degraded
         });
