@@ -39,7 +39,8 @@ const ARROW_PES = Object.freeze({
   host: '192.168.111.1',
   commandPort: 13001,
   eventPort: 9231,
-  dataPort: 13001
+  dataPort: 13001,
+  sshHostKeyEd25519: 'ssh-ed25519 255 SHA256:Dt4YfNq2cxtaqz3ssSPh6RXw4rPVPzZoJ7cLkH2Tias'
 });
 
 function parseJsonSafe(value, fallback = null) {
@@ -377,6 +378,7 @@ async function runSshOperation({ settings, operation, payload, logger }) {
 
       run = await execFileAsync(plinkBin, [
         '-batch',
+        '-hostkey', ARROW_PES.sshHostKeyEd25519,
         '-P', String(settings.sshPort),
         '-l', settings.sshUser,
         '-pw', settings.sshPassword,
