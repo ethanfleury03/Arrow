@@ -4312,6 +4312,7 @@ function bind() {
   bindClick('btnAlignMiddle', () => setAlign('y', 'middle'));
   bindClick('btnAlignBottom', () => setAlign('y', 'bottom'));
   bindClick('btnAutoSendToggle', toggleAutoSend);
+  bindClick('btnFinishPrinting', () => executeCommand('print_finish'));
   bindClick('btnToggleDiscoveryMode', toggleDiscoveryMode);
   bindClick('btnFlipHorizontal', () => toggleFlip('x'));
   bindClick('btnFlipVertical', () => toggleFlip('y'));

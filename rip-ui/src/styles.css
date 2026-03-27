@@ -159,6 +159,41 @@ header {
   font-weight: 700;
 }
 
+.finish-printing-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 5px 9px;
+  border: 1px solid var(--panel-edge-strong);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff 0%, #f1f1f1 100%);
+  color: #1a1a1a;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.finish-printing-btn:hover {
+  background: linear-gradient(180deg, #ffffff 0%, #e5e5e5 100%);
+  border-color: var(--brand-red);
+  transform: translateY(-1px);
+}
+
+.finish-printing-btn:active {
+  transform: translateY(0);
+}
+
+.finish-printing-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.finish-printing-text {
+  letter-spacing: 0.2px;
+}
+
 .wifi-outline {
   position: relative;
   display: inline-flex;
@@ -363,7 +398,7 @@ h3 { margin: var(--space-2) 0 var(--space-1); font-size: 12px; font-weight: 700;
 
 .bottom-controls-layout {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-top: 2px;
 }
@@ -389,8 +424,17 @@ h3 { margin: var(--space-2) 0 var(--space-1); font-size: 12px; font-weight: 700;
 }
 
 .bottom-control-card .btn-grid > button {
-  width: min(100%, 190px);
+  width: 100%;
   max-width: none;
+}
+
+.queue-list {
+  font-size: 12px;
+  line-height: 1.45;
+  padding-left: 18px;
+  margin: 8px 0 0;
+  max-height: 120px;
+  overflow: auto;
 }
 
 .cmd-note {

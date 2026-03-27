@@ -21,6 +21,10 @@
               <span class="auto-send-icon" id="autoSendIcon" aria-hidden="true">⏸</span>
               <span class="auto-send-text" id="autoSendText">Auto-send Off</span>
             </button>
+            <button id="btnFinishPrinting" class="finish-printing-btn" type="button" aria-label="Finish printing" title="Finish printing">
+              <span class="finish-printing-icon" aria-hidden="true">⏹</span>
+              <span class="finish-printing-text">Finish Printing</span>
+            </button>
           </div>
         </div>
       </div>
@@ -74,7 +78,7 @@
                   <div class="btn-grid cols-2" id="controlsPriming"></div>
                 </section>
 
-                <section class="workflow-section bottom-controls-layout" aria-label="Engine, head, and print control commands">
+                <section class="workflow-section bottom-controls-layout" aria-label="Engine and head control commands">
                   <section class="control-card bottom-control-card" aria-label="Engine controls">
                     <h3>Engine</h3>
                     <div class="btn-grid cols-1" id="controlsEngine"></div>
@@ -84,13 +88,8 @@
                     <h3>Head</h3>
                     <div class="btn-grid cols-1" id="controlsHead"></div>
                   </section>
-
-                  <section class="control-card bottom-control-card" aria-label="Print control commands">
-                    <h3>Print Control</h3>
-                    <div class="btn-grid cols-1" id="controlsPrint"></div>
-                    <ul id="queue"></ul>
-                  </section>
                 </section>
+                <ul id="queue" class="queue-list"></ul>
               </section>
 
               <section class="tab-panel panel printhead-logs-panel" aria-label="Logs panel">
