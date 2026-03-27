@@ -189,6 +189,8 @@ const ACTIVE_JOB_STATUSES = new Set([
   JOB_STATUS.SENT
 ]);
 
+const SEND_CONFIRMATION_GRACE_MS = 90 * 1000;
+
 // Status categories for filtering
 const PAST_JOB_FILTER_CATEGORIES = Object.freeze({
   COMPLETED: [JOB_STATUS.DONE, JOB_STATUS.COMPLETED],
@@ -1254,6 +1256,46 @@ function determineJobStatusFromResult(result) {
   };
 }
 
+function isTransientSendError(error) {
+  const code = String(error?.bridgeError?.code || error?.code || '').toUpperCase();
+  const msg = String(error?.bridgeError?.message || error?.message || '').toLowerCase();
+  if (code === 'BRIDGE_UNAVAILABLE') return true;
+  return msg.includes('aborted') || msg.includes('timeout') || msg.includes('unavailable');
+}
+
+function markJobPendingConfirmation(job, reasonCode = 'send_timeout_or_abort') {
+  if (!job) return;
+  const nowIso = new Date().toISOString();
+  job.status = JOB_STATUS.SENT;
+  job.pendingConfirmation = {
+    reasonCode,
+    startedAt: nowIso,
+    graceMs: SEND_CONFIRMATION_GRACE_MS
+  };
+  job.sentAt = job.sentAt || nowIso;
+  job.error = null;
+  job.failReason = null;
+}
+
+function expirePendingConfirmationJobs(nowMs = Date.now()) {
+  let changed = false;
+  state.jobs.forEach(job => {
+    if (normalizeJobStatus(job.status) !== JOB_STATUS.SENT) return;
+    const startedAtMs = Date.parse(job?.pendingConfirmation?.startedAt || job?.sentAt || 0) || 0;
+    const graceMs = Number(job?.pendingConfirmation?.graceMs || SEND_CONFIRMATION_GRACE_MS);
+    if (!startedAtMs || (nowMs - startedAtMs) < graceMs) return;
+    job.status = JOB_STATUS.FAILED;
+    job.failedAt = new Date(nowMs).toISOString();
+    job.failReason = 'pending_confirmation_timeout';
+    job.error = 'Send confirmation timed out before print evidence was observed.';
+    delete job.pendingConfirmation;
+    log(`Job ${job.id} marked failed: pending confirmation timeout.`);
+    changed = true;
+  });
+  if (changed) refreshQueueDepth();
+  return changed;
+}
+
 async function dispatchQueuedJob(nextJob, source = 'auto-send') {
   const bridge = getBridge();
   const hasQueuedSender = Boolean(bridge && typeof bridge.sendQueuedJob === 'function');
@@ -1351,8 +1393,23 @@ async function dispatchQueuedJob(nextJob, source = 'auto-send') {
     
     return statusDecision.status !== JOB_STATUS.FAILED;
   } catch (error) {
-    // Only mark failed on explicit exceptions (bridge errors, network failures, etc.)
     const msg = getActionableError(error);
+    if (isTransientSendError(error)) {
+      markJobPendingConfirmation(nextJob, 'send_timeout_or_abort');
+      state.submission.lastResult = `PENDING_CONFIRMATION: ${msg}`;
+      log(`Send confirmation pending for ${nextJob.id}. Bridge timeout/abort observed; waiting for PRINTING evidence.`);
+      await appendAudit({
+        type: 'send-job',
+        copies: Number(nextJob.copies || 1),
+        outcome: 'pending-confirmation',
+        statusReason: 'send_timeout_or_abort',
+        error: msg,
+        jobId: nextJob.id
+      });
+      state.status.engine = state.status.engine === 'PRINTING' ? state.status.engine : 'SENDING';
+      return true;
+    }
+
     nextJob.status = JOB_STATUS.FAILED;
     nextJob.error = msg;
     nextJob.failedAt = new Date().toISOString();
@@ -4010,12 +4067,33 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
   // Only mark jobs as completed when engine returns to idle/ready AFTER being in a printing state
   const liveEngineUpper = String(mapped.engineState || '').toUpperCase();
   const isEngineIdle = ['IDLE', 'READY', 'OFF'].includes(liveEngineUpper);
-  const wasEnginePrinting = ['PRINTING'].includes(liveEngineUpper);
-  
+  const isEnginePrinting = liveEngineUpper === 'PRINTING';
+
   // Track engine state transitions for completion detection
   const previousEngineState = String(state.liveStatus.previousEngineState || '').toUpperCase();
   state.liveStatus.previousEngineState = liveEngineUpper;
-  
+
+  // If engine is printing, promote pending/sent jobs into active printing path.
+  if (isEnginePrinting) {
+    const candidate = state.jobs.find(job => normalizeJobStatus(job.status) === JOB_STATUS.SENT)
+      || state.jobs.find(job => normalizeJobStatus(job.status) === JOB_STATUS.SENDING);
+    if (candidate) {
+      candidate.status = JOB_STATUS.PRINTING;
+      candidate.printingStartedAt = candidate.printingStartedAt || new Date().toISOString();
+      if (candidate.pendingConfirmation) {
+        candidate.pendingConfirmation.confirmedAt = new Date().toISOString();
+        candidate.pendingConfirmation.confirmedBy = 'engine-printing';
+      }
+      log(`Print confirmed for ${candidate.id} via engine PRINTING state.`);
+      refreshQueueDepth();
+    }
+  }
+
+  // Expire pending confirmations only when not actively printing.
+  if (!isEnginePrinting) {
+    expirePendingConfirmationJobs(Date.now());
+  }
+
   // Detect completion: engine transitioned from PRINTING to IDLE/READY
   // OR engine is IDLE/READY and we have a job in PRINTING state
   if (isEngineIdle) {
@@ -4039,6 +4117,7 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
         printingJob.status = JOB_STATUS.DONE;
         printingJob.completedAt = new Date().toISOString();
         printingJob.completionReason = `engine-${liveEngineUpper.toLowerCase()}`;
+        delete printingJob.pendingConfirmation;
         state.queue.push(`complete(${printingJob.id}) via ${channel}`);
         log(`Print finished for ${printingJob.id}; engine now ${liveEngineUpper}, queue advancing.`);
         refreshQueueDepth();
