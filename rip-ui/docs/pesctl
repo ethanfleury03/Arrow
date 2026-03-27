@@ -115,10 +115,10 @@ if op in ('clean_light', 'clean_medium', 'clean_heavy'):
 payload = {}
 if args_b64:
  try:
- decoded = base64.b64decode(args_b64)
- payload = json.loads(decoded)
+  decoded = base64.b64decode(args_b64)
+  payload = json.loads(decoded)
  except Exception:
- payload = {}
+  payload = {}
 
 if level is None:
  for k in ('serviceType', 'service_type', 'procedureName', 'procedure_name', 'level', 'service'):
@@ -189,10 +189,10 @@ cmd_port = int(os.environ.get('CMD_PORT', '13001'))
 payload = {}
 if args_b64:
  try:
- decoded = base64.b64decode(args_b64)
- payload = json.loads(decoded)
+  decoded = base64.b64decode(args_b64)
+  payload = json.loads(decoded)
  except Exception:
- payload = {}
+  payload = {}
 
 print_units = payload.get('printUnits')
 if print_units is None:
