@@ -160,7 +160,8 @@ function parseEngineStateNumberFromRaw(text) {
   const src = String(text || '');
   if (!src) return null;
   const match = src.match(/engineStatus\s*[=.:]\s*[^\n\r]*?state\s*[=:]\s*(\d{1,3})/i)
-    || src.match(/engineStatus\.state\s*[=:]\s*(\d{1,3})/i);
+    || src.match(/engineStatus\.state\s*[=:]\s*(\d{1,3})/i)
+    || src.match(/\bstate\s*[=:]\s*(\d{1,3})\b/i);
   if (!match) return null;
   const value = Number(match[1]);
   return Number.isInteger(value) ? value : null;
@@ -269,7 +270,9 @@ function resolveEngineState(status = {}) {
         ['productInfo.rawStdout', productInfo?.rawStdout],
         ['productInfo.raw', productInfo?.raw],
         ['details.raw', details?.raw],
-        ['status.raw', status?.raw]
+        ['status.raw', status?.raw],
+        ['status.output', status?.output],
+        ['details.output', details?.output]
       ];
       for (const [source, raw] of rawTextCandidates) {
         const parsed = parseEngineStateNumberFromRaw(raw);
@@ -280,6 +283,16 @@ function resolveEngineState(status = {}) {
           break;
         }
       }
+    }
+  }
+
+  if (!rawLabel && numeric == null) {
+    const serialized = JSON.stringify(status || {});
+    const parsed = parseEngineStateNumberFromRaw(serialized);
+    if (parsed != null) {
+      numeric = parsed;
+      rawLabel = ENGINE_STATE_VALUE_TO_NAME[parsed] || '';
+      extraction = 'status.serialized:regex';
     }
   }
 
