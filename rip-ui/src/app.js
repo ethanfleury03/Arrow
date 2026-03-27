@@ -3946,11 +3946,26 @@ function computeEligibility(command) {
   }
 
   const engine = String(state.liveStatus.engineState || 'UNKNOWN').toUpperCase();
-  if (['FAULT', 'ERROR', 'NOT_READY'].includes(engine)) {
+  const isFaulted = ['FAULT', 'ERROR', 'NOT_READY'].includes(engine);
+
+  // Recovery commands allowed during fault for operator recovery workflow
+  const RECOVERY_COMMANDS = ['engine_shutdown', 'engine_initialise', 'engine_replace_wipers'];
+  const isRecoveryCommand = RECOVERY_COMMANDS.includes(command);
+
+  if (isFaulted && !isRecoveryCommand) {
     checks.push({
       level: 'block',
       message: `Engine reported ${engine}.`,
-      remediation: 'Resolve fault and refresh status before running mutating commands.'
+      remediation: 'Resolve fault and refresh status before running mutating commands. Recovery commands (Shutdown, Initialise, Replace Wipers) remain available.'
+    });
+  }
+
+  // Add info message for recovery commands during fault (not a block, just informative)
+  if (isFaulted && isRecoveryCommand) {
+    checks.push({
+      level: 'warn',
+      message: `Engine reported ${engine}. Recovery command ${command} is available.`,
+      remediation: 'Use recovery commands to resolve fault state, then refresh status.'
     });
   }
 
