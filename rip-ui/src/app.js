@@ -155,7 +155,46 @@ let layoutPreviewImageSrc = '';
 const JOB_NUMERIC_EDITING_IDS = new Set();
 const MIN_VISIBLE_QUEUE_ROWS = 12;
 const MIN_VISIBLE_PAST_ROWS = 8;
-const TERMINAL_JOB_STATUSES = new Set(['done', 'failed', 'completed', 'error', 'cancelled']);
+
+// Canonical job status constants - aligned with backend JOB_STATES
+const JOB_STATUS = Object.freeze({
+  DRAFT: 'draft',
+  VALIDATED: 'validated',
+  QUEUED: 'queued',
+  SENDING: 'sending',
+  PREPARING: 'preparing',
+  PRINTING: 'printing',
+  SENT: 'sent',
+  COMPLETED: 'completed',
+  DONE: 'done',
+  FAILED: 'failed',
+  ERROR: 'error',
+  CANCELLED: 'cancelled'
+});
+
+// Terminal statuses - jobs in these states are shown in "past" tab
+const TERMINAL_JOB_STATUSES = new Set([
+  JOB_STATUS.DONE,
+  JOB_STATUS.COMPLETED,
+  JOB_STATUS.FAILED,
+  JOB_STATUS.ERROR,
+  JOB_STATUS.CANCELLED
+]);
+
+// Non-terminal active statuses
+const ACTIVE_JOB_STATUSES = new Set([
+  JOB_STATUS.SENDING,
+  JOB_STATUS.PREPARING,
+  JOB_STATUS.PRINTING,
+  JOB_STATUS.SENT
+]);
+
+// Status categories for filtering
+const PAST_JOB_FILTER_CATEGORIES = Object.freeze({
+  COMPLETED: [JOB_STATUS.DONE, JOB_STATUS.COMPLETED],
+  FAILED: [JOB_STATUS.FAILED, JOB_STATUS.ERROR],
+  CANCELLED: [JOB_STATUS.CANCELLED]
+});
 const COMMANDS = [
   { name: 'clean_light', mutating: true, label: 'Light clean', priority: 'secondary' },
   { name: 'clean_medium', mutating: true, label: 'Medium clean', priority: 'secondary' },
@@ -1016,7 +1055,13 @@ function normalizeJobStatus(status) {
 }
 
 function isTerminalJobStatus(status) {
-  return TERMINAL_JOB_STATUSES.has(normalizeJobStatus(status));
+  const normalized = normalizeJobStatus(status);
+  return TERMINAL_JOB_STATUSES.has(normalized);
+}
+
+function isActiveJobStatus(status) {
+  const normalized = normalizeJobStatus(status);
+  return ACTIVE_JOB_STATUSES.has(normalized);
 }
 
 function getJobsTableTab() {
@@ -1031,14 +1076,15 @@ function getPastJobsFilter() {
 
 function isRetryablePastStatus(status) {
   const normalized = normalizeJobStatus(status);
-  return ['failed', 'error', 'cancelled'].includes(normalized);
+  return PAST_JOB_FILTER_CATEGORIES.FAILED.includes(normalized) || 
+         normalized === JOB_STATUS.CANCELLED;
 }
 
 function classifyPastJobFilter(status) {
   const normalized = normalizeJobStatus(status);
-  if (normalized === 'cancelled') return 'cancelled';
-  if (['failed', 'error'].includes(normalized)) return 'failed';
-  if (['done', 'completed'].includes(normalized)) return 'completed';
+  if (PAST_JOB_FILTER_CATEGORIES.CANCELLED.includes(normalized)) return 'cancelled';
+  if (PAST_JOB_FILTER_CATEGORIES.FAILED.includes(normalized)) return 'failed';
+  if (PAST_JOB_FILTER_CATEGORIES.COMPLETED.includes(normalized)) return 'completed';
   return null;
 }
 
@@ -1100,7 +1146,7 @@ function getVisibleJobsForTable(tab = getJobsTableTab()) {
 }
 
 function hasQueuedJobs() {
-  return state.jobs.some(job => job.status === 'queued');
+  return state.jobs.some(job => normalizeJobStatus(job.status) === JOB_STATUS.QUEUED);
 }
 
 function isDiscoveryReadOnlyMode() {
@@ -1108,7 +1154,7 @@ function isDiscoveryReadOnlyMode() {
 }
 
 function hasActivePrintJob() {
-  return state.jobs.some(job => ['sending', 'printing'].includes(String(job.status || '').toLowerCase()));
+  return state.jobs.some(job => isActiveJobStatus(job.status));
 }
 
 function isPrinterIdleForAutoDispatch() {
@@ -1129,18 +1175,98 @@ function getAutoSendBlockReason() {
 }
 
 function refreshQueueDepth() {
-  state.status.queueDepth = state.jobs.filter(job => String(job.status || '').toLowerCase() === 'queued').length;
+  state.status.queueDepth = state.jobs.filter(job => normalizeJobStatus(job.status) === JOB_STATUS.QUEUED).length;
+}
+
+/**
+ * Determine job status from bridge send result using evidence-based classification.
+ * Returns { status, reason, isTerminal } where status is the canonical status to set.
+ */
+function determineJobStatusFromResult(result) {
+  // Explicit terminal success indicators
+  const TERMINAL_SUCCESS_STATUSES = ['completed', 'done', 'finished', 'success'];
+  
+  // Non-terminal indicators (job accepted but still in progress)
+  const NON_TERMINAL_STATUSES = ['accepted', 'sent', 'printing', 'preparing', 'queued', 'submitted'];
+  
+  // Explicit failure indicators
+  const FAILURE_STATUSES = ['failed', 'error', 'rejected', 'cancelled', 'timeout'];
+
+  const resultStatus = String(result?.status || '').toLowerCase().trim();
+  const resultAccepted = result?.accepted === true;
+  const resultError = result?.error || result?.message;
+
+  // Case 1: Explicit error in result -> FAILED
+  if (resultError && !resultAccepted) {
+    const errorStr = String(resultError).toLowerCase();
+    const isTerminalError = FAILURE_STATUSES.some(token => errorStr.includes(token));
+    if (isTerminalError) {
+      return { 
+        status: JOB_STATUS.FAILED, 
+        reason: `bridge-error: ${resultError}`,
+        isTerminal: true 
+      };
+    }
+  }
+
+  // Case 2: Check for explicit terminal success
+  if (TERMINAL_SUCCESS_STATUSES.some(token => resultStatus.includes(token))) {
+    return { 
+      status: JOB_STATUS.DONE, 
+      reason: 'bridge-confirmed-completion',
+      isTerminal: true 
+    };
+  }
+
+  // Case 3: Check for explicit failure status
+  if (FAILURE_STATUSES.some(token => resultStatus.includes(token))) {
+    return { 
+      status: JOB_STATUS.FAILED, 
+      reason: `bridge-status: ${resultStatus}`,
+      isTerminal: true 
+    };
+  }
+
+  // Case 4: Accepted or non-terminal status -> PRINTING (await completion)
+  if (resultAccepted || NON_TERMINAL_STATUSES.some(token => resultStatus.includes(token))) {
+    return { 
+      status: JOB_STATUS.PRINTING, 
+      reason: resultAccepted ? 'bridge-accepted' : 'bridge-status-incomplete',
+      isTerminal: false 
+    };
+  }
+
+  // Case 5: No explicit status but result exists -> assume printing (non-terminal)
+  // This prevents false failures when bridge returns unexpected but successful response
+  if (result && typeof result === 'object') {
+    return { 
+      status: JOB_STATUS.PRINTING, 
+      reason: 'bridge-response-without-status',
+      isTerminal: false 
+    };
+  }
+
+  // Case 6: Unknown/empty result -> FAILED (explicit failure condition)
+  return { 
+    status: JOB_STATUS.FAILED, 
+    reason: 'empty-or-invalid-bridge-response',
+    isTerminal: true 
+  };
 }
 
 async function dispatchQueuedJob(nextJob, source = 'auto-send') {
   const bridge = getBridge();
   const hasQueuedSender = Boolean(bridge && typeof bridge.sendQueuedJob === 'function');
   const hasLegacySubmit = Boolean(bridge && typeof bridge.submitJob === 'function');
+  
+  // Pre-send validation failures
   if (!bridge || (!hasQueuedSender && !hasLegacySubmit)) {
     const msg = 'NOT-CONFIGURED: sendQueuedJob/submitJob bridge hook unavailable.';
     state.submission.lastResult = `ERROR: ${msg}`;
-    nextJob.status = 'failed';
+    nextJob.status = JOB_STATUS.FAILED;
     nextJob.error = msg;
+    nextJob.failedAt = new Date().toISOString();
+    nextJob.failReason = 'bridge-unavailable';
     log(msg);
     await appendAudit({ type: 'send-job', copies: Number(nextJob.copies || 1), outcome: 'bridge-unavailable', error: msg, jobId: nextJob.id });
     return false;
@@ -1149,14 +1275,18 @@ async function dispatchQueuedJob(nextJob, source = 'auto-send') {
   if (!nextJob.inputPath) {
     const msg = 'Missing local file path. Load artwork from disk in Electron and retry.';
     state.submission.lastResult = `ERROR: ${msg}`;
-    nextJob.status = 'failed';
+    nextJob.status = JOB_STATUS.FAILED;
     nextJob.error = msg;
+    nextJob.failedAt = new Date().toISOString();
+    nextJob.failReason = 'invalid-payload';
     log(`Send Job aborted: ${msg}`);
     await appendAudit({ type: 'send-job', copies: Number(nextJob.copies || 1), outcome: 'invalid-payload', error: msg, jobId: nextJob.id });
     return false;
   }
 
-  nextJob.status = 'sending';
+  // Transition to SENDING
+  nextJob.status = JOB_STATUS.SENDING;
+  nextJob.sentAt = new Date().toISOString();
   state.status.engine = 'PRINTING';
   state.queue.push(`dispatch(${nextJob.id}) via ${source}`);
   log(`Auto-send dispatched ${nextJob.id}.`);
@@ -1182,24 +1312,53 @@ async function dispatchQueuedJob(nextJob, source = 'auto-send') {
       });
 
     nextJob.bridgeJobId = result?.jobId || null;
-    const resultStatus = String(result?.status || 'completed').toLowerCase();
-    const completed = ['completed', 'done', 'finished', 'success'].some(token => resultStatus.includes(token));
-    nextJob.status = completed ? 'done' : 'printing';
-    state.submission.lastResult = `SENT: ${result?.status || 'completed'}`;
+    
+    // Use evidence-based status determination
+    const statusDecision = determineJobStatusFromResult(result);
+    nextJob.status = statusDecision.status;
+    
+    // Track completion time for terminal success
+    if (statusDecision.isTerminal && statusDecision.status === JOB_STATUS.DONE) {
+      nextJob.completedAt = new Date().toISOString();
+      state.status.engine = 'IDLE';
+    } else if (!statusDecision.isTerminal) {
+      // Job is in progress - track expected completion via engine state polling
+      state.status.engine = 'PRINTING';
+    } else if (statusDecision.status === JOB_STATUS.FAILED) {
+      // Explicit failure
+      nextJob.failedAt = new Date().toISOString();
+      nextJob.failReason = statusDecision.reason;
+      state.status.engine = 'IDLE';
+    }
+
+    state.submission.lastResult = statusDecision.isTerminal 
+      ? `${statusDecision.status.toUpperCase()}: ${statusDecision.reason}`
+      : `PRINTING: ${statusDecision.reason}`;
+    
     log(
-      completed
-        ? `Send Job completed for ${nextJob.id} (${nextJob.copies || 1} copies).`
-        : `Send Job accepted for ${nextJob.id}; awaiting finish status.`
+      statusDecision.isTerminal
+        ? `Send Job ${statusDecision.status} for ${nextJob.id}: ${statusDecision.reason} (${nextJob.copies || 1} copies).`
+        : `Send Job accepted for ${nextJob.id}; awaiting completion (${statusDecision.reason}).`
     );
-    await appendAudit({ type: 'send-job', copies: Number(nextJob.copies || 1), outcome: 'adapter-sent', jobId: result?.jobId || nextJob.id });
-    state.status.engine = completed ? 'IDLE' : 'PRINTING';
-    return true;
+    
+    await appendAudit({ 
+      type: 'send-job', 
+      copies: Number(nextJob.copies || 1), 
+      outcome: statusDecision.isTerminal ? statusDecision.status : 'adapter-accepted', 
+      statusReason: statusDecision.reason,
+      jobId: result?.jobId || nextJob.id 
+    });
+    
+    return statusDecision.status !== JOB_STATUS.FAILED;
   } catch (error) {
+    // Only mark failed on explicit exceptions (bridge errors, network failures, etc.)
     const msg = getActionableError(error);
-    nextJob.status = 'failed';
+    nextJob.status = JOB_STATUS.FAILED;
     nextJob.error = msg;
+    nextJob.failedAt = new Date().toISOString();
+    nextJob.failReason = 'adapter-error';
     state.submission.lastResult = `ERROR: ${msg}`;
-    log(`RIP adapter unavailable. Send Job aborted. ${msg}`);
+    log(`RIP adapter error. Send Job aborted. ${msg}`);
     await appendAudit({ type: 'send-job', copies: Number(nextJob.copies || 1), outcome: 'adapter-error', error: msg, jobId: nextJob.id });
     state.status.engine = 'IDLE';
     return false;
@@ -1219,7 +1378,7 @@ function tryAutoDispatchNextJob(source = 'auto-send') {
   if (!state.controls?.autoSendEnabled) return false;
   if (!hasQueuedJobs() || hasActivePrintJob() || !isPrinterIdleForAutoDispatch()) return false;
 
-  const nextJob = state.jobs.find(job => String(job.status || '').toLowerCase() === 'queued');
+  const nextJob = state.jobs.find(job => normalizeJobStatus(job.status) === JOB_STATUS.QUEUED);
   if (!nextJob) return false;
 
   dispatchQueuedJob(nextJob, source);
@@ -1272,8 +1431,8 @@ function render() {
   const selectedJobId = state.ui?.selectedJobId;
   const queueSummaryEl = document.getElementById('queueFlowSummary');
   if (queueSummaryEl) {
-    const activeCount = state.jobs.filter(job => ['sending', 'printing'].includes(String(job.status || '').toLowerCase())).length;
-    const queuedCount = state.jobs.filter(job => String(job.status || '').toLowerCase() === 'queued').length;
+    const activeCount = state.jobs.filter(job => isActiveJobStatus(job.status)).length;
+    const queuedCount = state.jobs.filter(job => normalizeJobStatus(job.status) === JOB_STATUS.QUEUED).length;
     const blockedReason = getAutoSendBlockReason();
     queueSummaryEl.textContent = state.controls?.autoSendEnabled
       ? `Auto-send ON · ${activeCount} active · ${queuedCount} queued${blockedReason ? ` · ${blockedReason}` : ''}`
@@ -1306,9 +1465,9 @@ function render() {
     const totalRows = jobsTab === 'past' ? Math.max(MIN_VISIBLE_PAST_ROWS, visibleJobs.length) : Math.max(MIN_VISIBLE_QUEUE_ROWS, visibleJobs.length);
 
     const queuedJobIds = state.jobs
-      .filter(job => normalizeJobStatus(job.status) === 'queued')
+      .filter(job => normalizeJobStatus(job.status) === JOB_STATUS.QUEUED)
       .map(job => job.id);
-    const activeJob = state.jobs.find(job => ['sending', 'printing'].includes(String(job.status || '').toLowerCase()));
+    const activeJob = state.jobs.find(job => isActiveJobStatus(job.status));
     const activeJobId = activeJob?.id || null;
     const nextUpJobId = queuedJobIds[0] || null;
 
@@ -1590,7 +1749,7 @@ function addMockJob() {
   state.counter += 1;
   const id = `JOB-${String(state.counter).padStart(4, '0')}`;
   const name = state.artwork.loaded ? `${state.artwork.name.replace(/\.pdf$/i, '')}_${state.counter}.pdf` : `mock_${state.counter}.pdf`;
-  state.jobs.push({ id, name, status: 'queued' });
+  state.jobs.push({ id, name, status: JOB_STATUS.QUEUED });
   refreshQueueDepth();
   state.queue.push(`submit(${id})`);
   log(`Queued deterministic mock job ${id}`);
@@ -1649,7 +1808,7 @@ async function handleSendJobCopies(copyCount) {
       id: localJobId,
       bridgeJobId,
       name: state.artwork.name || `job_${localJobId}.pdf`,
-      status: 'queued',
+      status: JOB_STATUS.QUEUED,
       copies,
       inputPath: state.artwork.inputPath,
       createdAt: new Date().toISOString()
@@ -1792,19 +1951,19 @@ function pruneAuditNow() {
 
 function markJobsPrintingIfNeeded(control) {
   if (control === 'start') {
-    state.jobs = state.jobs.map(j => (j.status === 'queued' ? { ...j, status: 'printing' } : j));
+    state.jobs = state.jobs.map(j => (normalizeJobStatus(j.status) === JOB_STATUS.QUEUED ? { ...j, status: JOB_STATUS.PRINTING } : j));
     state.status.engine = 'PRINTING';
     return;
   }
 
   if (control === 'finish') {
-    state.jobs = state.jobs.map(j => (j.status === 'printing' ? { ...j, status: 'done' } : j));
+    state.jobs = state.jobs.map(j => (normalizeJobStatus(j.status) === JOB_STATUS.PRINTING ? { ...j, status: JOB_STATUS.DONE } : j));
     state.status.engine = 'IDLE';
     return;
   }
 
   if (control === 'clear') {
-    state.jobs = state.jobs.map(j => ({ ...j, status: 'queued' }));
+    state.jobs = state.jobs.map(j => ({ ...j, status: JOB_STATUS.QUEUED }));
     state.status.engine = 'IDLE';
   }
 }
@@ -1812,7 +1971,7 @@ function markJobsPrintingIfNeeded(control) {
 function validateControl(control) {
   const expected = state.simulator.expected[state.simulator.stepIndex];
 
-  if (control === 'prepare' && state.jobs.every(j => j.status !== 'queued')) {
+  if (control === 'prepare' && state.jobs.every(j => normalizeJobStatus(j.status) !== JOB_STATUS.QUEUED)) {
     const message = 'FAIL: prepare requires at least one queued job';
     state.simulator.lastResult = message;
     state.simulator.history.unshift({ control, result: message });
@@ -1897,7 +2056,7 @@ function runFaultScenario() {
   state.simulator.stepIndex = 0;
   state.simulator.lastResult = 'RUNNING-FAULT-SCENARIO';
   state.simulator.history.unshift({ control: 'auto', result: 'RUNNING deterministic fault scenario' });
-  state.jobs = state.jobs.map(j => ({ ...j, status: 'queued' }));
+  state.jobs = state.jobs.map(j => ({ ...j, status: JOB_STATUS.QUEUED }));
   log('Started deterministic fault scenario (prepare with no queued jobs).');
   render();
 
@@ -1950,9 +2109,9 @@ function runRecoveryScenario() {
 
     pressControl('prepare');
 
-    const firstHeld = state.jobs.find(j => j.status === 'held');
+    const firstHeld = state.jobs.find(j => normalizeJobStatus(j.status) === 'held');
     if (firstHeld) {
-      firstHeld.status = 'queued';
+      firstHeld.status = JOB_STATUS.QUEUED;
       log(`Recovery action: re-queued ${firstHeld.id}.`);
     }
 
@@ -3847,14 +4006,59 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
   state.liveStatus.source = mapped.source;
   state.liveStatus.streamConnected = true;
 
+  // Evidence-based job completion detection
+  // Only mark jobs as completed when engine returns to idle/ready AFTER being in a printing state
   const liveEngineUpper = String(mapped.engineState || '').toUpperCase();
-  if (['IDLE', 'READY'].includes(liveEngineUpper)) {
-    const printingJob = state.jobs.find(job => String(job.status || '').toLowerCase() === 'printing');
-    if (printingJob) {
-      printingJob.status = 'done';
-      state.queue.push(`complete(${printingJob.id}) via ${channel}`);
-      log(`Print finished for ${printingJob.id}; queue advancing.`);
-      refreshQueueDepth();
+  const isEngineIdle = ['IDLE', 'READY', 'OFF'].includes(liveEngineUpper);
+  const wasEnginePrinting = ['PRINTING'].includes(liveEngineUpper);
+  
+  // Track engine state transitions for completion detection
+  const previousEngineState = String(state.liveStatus.previousEngineState || '').toUpperCase();
+  state.liveStatus.previousEngineState = liveEngineUpper;
+  
+  // Detect completion: engine transitioned from PRINTING to IDLE/READY
+  // OR engine is IDLE/READY and we have a job in PRINTING state
+  if (isEngineIdle) {
+    // Find all jobs that are currently printing
+    const printingJobs = state.jobs.filter(job => 
+      String(job.status || '').toLowerCase() === JOB_STATUS.PRINTING
+    );
+    
+    for (const printingJob of printingJobs) {
+      // Additional evidence: check if job has been printing for a reasonable time
+      // or if engine was previously printing
+      const sentAt = printingJob.sentAt ? Date.parse(printingJob.sentAt) : 0;
+      const now = Date.now();
+      const minPrintTimeMs = 5000; // Minimum expected print time
+      const hasBeenPrintingLongEnough = (now - sentAt) > minPrintTimeMs;
+      
+      // Mark as completed if:
+      // 1. Engine transitioned from PRINTING to IDLE, OR
+      // 2. Engine is IDLE and job has been printing for minimum time
+      if (previousEngineState === 'PRINTING' || hasBeenPrintingLongEnough) {
+        printingJob.status = JOB_STATUS.DONE;
+        printingJob.completedAt = new Date().toISOString();
+        printingJob.completionReason = `engine-${liveEngineUpper.toLowerCase()}`;
+        state.queue.push(`complete(${printingJob.id}) via ${channel}`);
+        log(`Print finished for ${printingJob.id}; engine now ${liveEngineUpper}, queue advancing.`);
+        refreshQueueDepth();
+      }
+    }
+  }
+  
+  // Detect explicit failure states
+  const isEngineFaulted = ['FAULT', 'ERROR'].includes(liveEngineUpper);
+  if (isEngineFaulted) {
+    const activeJobs = state.jobs.filter(job => isActiveJobStatus(job.status));
+    for (const activeJob of activeJobs) {
+      // Only mark as failed if we haven't already recorded a terminal state
+      if (!isTerminalJobStatus(activeJob.status)) {
+        activeJob.status = JOB_STATUS.FAILED;
+        activeJob.failedAt = new Date().toISOString();
+        activeJob.failReason = `engine-${liveEngineUpper.toLowerCase()}`;
+        log(`Job ${activeJob.id} marked failed due to engine ${liveEngineUpper}.`);
+        refreshQueueDepth();
+      }
     }
   }
 
@@ -4337,7 +4541,7 @@ function retryPastJob(jobId) {
     id: retriedJobId,
     bridgeJobId: null,
     name: sourceJob.name || state.artwork.name || `job_${retriedJobId}.pdf`,
-    status: 'queued',
+    status: JOB_STATUS.QUEUED,
     copies,
     inputPath: sourceJob.inputPath,
     createdAt: new Date().toISOString(),
