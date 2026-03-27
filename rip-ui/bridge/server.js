@@ -482,6 +482,17 @@ function createBridgeServer(options = {}) {
 
         const moveHeadOp = raw?.details?.diagnostics?.operations?.startMovingPrintheads || {};
 
+        // Get engine operation capabilities from adapter if available
+        let engineOps = {};
+        try {
+          const diag = await adapter._buildDiagnostics?.();
+          if (diag?.operations) {
+            engineOps = diag.operations;
+          }
+        } catch (_) {
+          // If adapter diagnostics fail, engine ops will be empty (reported as unavailable)
+        }
+
         return json(res, 200, {
           ...raw,
           engineState: snapshot.engineState || raw.engineState || 'UNKNOWN',
@@ -499,6 +510,18 @@ function createBridgeServer(options = {}) {
               supported: Boolean(moveHeadOp?.allowed),
               reason: moveHeadOp?.reason || null,
               positions: ['capped', 'raised', 'print']
+            },
+            engineInitialise: {
+              supported: Boolean(engineOps?.initialiseEngine?.allowed),
+              reason: engineOps?.initialiseEngine?.reason || 'Backend unavailable or operation not configured'
+            },
+            engineShutdown: {
+              supported: Boolean(engineOps?.shutdownEngine?.allowed),
+              reason: engineOps?.shutdownEngine?.reason || 'Backend unavailable or operation not configured'
+            },
+            engineReplaceWipers: {
+              supported: Boolean(engineOps?.replaceWipers?.allowed),
+              reason: engineOps?.replaceWipers?.reason || 'Backend unavailable or operation not configured'
             }
           },
           source: 'bridge-http',

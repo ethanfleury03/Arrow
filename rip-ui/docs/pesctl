@@ -36,8 +36,10 @@ startPriming)
 echo "__START_PRIMING_REAL__" ;;
 startDepriming)
 echo "__START_DEPRIMING_REAL__" ;;
-replaceWipers|pausePrinting)
+pausePrinting)
 echo "__MAINT_STUB__" ;;
+replaceWipers)
+echo "__REPLACE_WIPERS_REAL__" ;;
 startServicing|clean_light|clean_medium|clean_heavy)
 echo "__START_SERVICING_REAL__" ;;
 startMovingPrintheads)
@@ -389,6 +391,72 @@ print(json.dumps({
  "commandPort": int("$CMD_PORT"),
  "exitCode": int("$RC"),
  "error": "startDepriming_failed",
+ "output": """$OUT"""
+}))
+PY
+ exit "$RC"
+fi
+printf '%s\n' "$OUT"
+exit 0
+fi
+
+if [[ "$CMDS" == "__REPLACE_WIPERS_REAL__" ]]; then
+OUT="$(OP="$OP" ARGS_B64="$ARGS_B64" HOST="$HOST" CMD_PORT="$CMD_PORT" python2 - <<'PY'
+import os, sys, json
+
+r = os.environ.get('PDL_THRIFT_ROOT', '/opt/memjet/PDL/MJ6.5.0-2.el7')
+sys.path[:0] = [r, r + '/memjet', r + '/Memjet']
+
+from memjet.psw.pdlib.thrift.pes_client import KPesClient
+
+op = os.environ.get('OP', '')
+host = os.environ.get('HOST', '127.0.0.1')
+cmd_port = int(os.environ.get('CMD_PORT', '13001'))
+
+client = KPesClient(host=host)
+client.open_connection()
+
+called = None
+for name in ('replaceWipers', 'wiperReplace', 'changeWipers'):
+ fn = getattr(client, name, None)
+ if not callable(fn):
+  continue
+ try:
+  fn()
+  called = name + '()'
+  break
+ except TypeError:
+  try:
+   fn([])
+   called = name + '([])'
+   break
+  except TypeError:
+   continue
+
+if not called:
+ raise RuntimeError('no compatible replaceWipers method signature on KPesClient (tried replaceWipers/wiperReplace/changeWipers with () and ([]))')
+
+print(json.dumps({
+ 'ok': True,
+ 'operation': op,
+ 'host': host,
+ 'commandPort': cmd_port,
+ 'exitCode': 0,
+ 'output': 'replaceWipers sent via {}'.format(called)
+}))
+PY
+)" || RC=$?
+RC=${RC:-0}
+if [[ "$RC" -ne 0 ]]; then
+ python2 - <<PY
+import json
+print(json.dumps({
+ "ok": False,
+ "operation": "$OP",
+ "host": "$HOST",
+ "commandPort": int("$CMD_PORT"),
+ "exitCode": int("$RC"),
+ "error": "replaceWipers_failed",
  "output": """$OUT"""
 }))
 PY

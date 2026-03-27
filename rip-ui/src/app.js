@@ -3911,6 +3911,39 @@ function computeEligibility(command) {
     }
   }
 
+  // Engine control capability checks - strictly disable if backend reports unsupported
+  if (command === 'engine_initialise') {
+    const cap = state.liveStatus?.capabilities?.engineInitialise || {};
+    if (cap.supported === false) {
+      checks.push({
+        level: 'block',
+        message: 'Engine initialise is not supported by the current backend.',
+        remediation: cap.reason || 'Enable RIP_BRIDGE_ENABLE_REAL_COMMANDS or check backend connectivity.'
+      });
+    }
+  }
+
+  if (command === 'engine_shutdown') {
+    const cap = state.liveStatus?.capabilities?.engineShutdown || {};
+    if (cap.supported === false) {
+      checks.push({
+        level: 'block',
+        message: 'Engine shutdown is not supported by the current backend.',
+        remediation: cap.reason || 'Enable RIP_BRIDGE_ENABLE_REAL_COMMANDS or check backend connectivity.'
+      });
+    }
+  }
+
+  if (command === 'engine_replace_wipers') {
+    const cap = state.liveStatus?.capabilities?.engineReplaceWipers || {};
+    if (cap.supported === false) {
+      checks.push({
+        level: 'block',
+        message: 'Replace wipers is not supported by the current backend.',
+        remediation: cap.reason || 'Enable RIP_BRIDGE_ENABLE_REAL_COMMANDS or check backend connectivity.'
+      });
+    }
+  }
 
   const engine = String(state.liveStatus.engineState || 'UNKNOWN').toUpperCase();
   if (['FAULT', 'ERROR', 'NOT_READY'].includes(engine)) {
