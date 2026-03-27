@@ -134,6 +134,7 @@ const INITIAL_STATE = {
     leftSidebarTab: 'artwork',
     rightSidebarTab: 'live',
     jobArrangeTab: 'arrange',
+    jobsTableTab: 'queued',
     arrange: {
       gapHorizontalMm: 0,
       gapVerticalMm: 0,
@@ -152,6 +153,8 @@ let layoutPreviewImage = null;
 let layoutPreviewImageSrc = '';
 const JOB_NUMERIC_EDITING_IDS = new Set();
 const MIN_VISIBLE_QUEUE_ROWS = 12;
+const MIN_VISIBLE_PAST_ROWS = 8;
+const TERMINAL_JOB_STATUSES = new Set(['done', 'failed', 'completed', 'error', 'cancelled']);
 const COMMANDS = [
   { name: 'clean_light', mutating: true, label: 'Light clean', priority: 'secondary' },
   { name: 'clean_medium', mutating: true, label: 'Medium clean', priority: 'secondary' },
@@ -885,6 +888,7 @@ function setTopTab(nextTab, { focus = false } = {}) {
   if (!state.ui) state.ui = deepClone(INITIAL_STATE.ui);
   state.ui.topTab = tab;
   syncTopTabUI();
+  syncJobsTableTabsUI();
   if (focus) {
     const focusEl = document.getElementById(tab === 'jobs' ? 'tabJobSubmission' : 'tabPrintheadControls');
     focusEl?.focus();
@@ -1004,6 +1008,64 @@ function getCommandButtons() {
     }
   });
   return buttons;
+}
+
+function normalizeJobStatus(status) {
+  return String(status || '').trim().toLowerCase();
+}
+
+function isTerminalJobStatus(status) {
+  return TERMINAL_JOB_STATUSES.has(normalizeJobStatus(status));
+}
+
+function getJobsTableTab() {
+  const tab = state.ui?.jobsTableTab;
+  return tab === 'past' ? 'past' : 'queued';
+}
+
+function setJobsTableTab(nextTab, { focus = false } = {}) {
+  const tab = nextTab === 'past' ? 'past' : 'queued';
+  if (!state.ui) state.ui = deepClone(INITIAL_STATE.ui);
+  state.ui.jobsTableTab = tab;
+  syncJobsTableTabsUI();
+  render();
+  if (focus) {
+    const focusEl = document.getElementById(tab === 'past' ? 'btnJobsTabPast' : 'btnJobsTabQueued');
+    focusEl?.focus();
+  }
+  persistState();
+}
+
+function syncJobsTableTabsUI() {
+  const active = getJobsTableTab();
+  const queuedBtn = document.getElementById('btnJobsTabQueued');
+  const pastBtn = document.getElementById('btnJobsTabPast');
+  const map = { queued: queuedBtn, past: pastBtn };
+  Object.entries(map).forEach(([key, btn]) => {
+    if (!btn) return;
+    const selected = key === active;
+    if (typeof btn.setAttribute === 'function') {
+      btn.setAttribute('aria-selected', selected ? 'true' : 'false');
+    }
+    if (btn.dataset) btn.dataset.active = selected ? 'true' : 'false';
+    btn.tabIndex = selected ? 0 : -1;
+  });
+}
+
+function getVisibleJobsForTable(tab = getJobsTableTab()) {
+  if (tab === 'past') {
+    return state.jobs
+      .filter(job => isTerminalJobStatus(job.status))
+      .slice()
+      .sort((a, b) => {
+        const ta = Date.parse(a.finishedAt || a.completedAt || a.updatedAt || a.createdAt || 0) || 0;
+        const tb = Date.parse(b.finishedAt || b.completedAt || b.updatedAt || b.createdAt || 0) || 0;
+        if (tb !== ta) return tb - ta;
+        return String(b.id || '').localeCompare(String(a.id || ''));
+      });
+  }
+
+  return state.jobs.filter(job => !isTerminalJobStatus(job.status));
 }
 
 function hasQueuedJobs() {
@@ -1190,17 +1252,19 @@ function render() {
   const jobTable = document.getElementById('jobTable');
   if (jobTable) {
     const rows = [];
-    const totalRows = Math.max(MIN_VISIBLE_QUEUE_ROWS, state.jobs.length);
+    const jobsTab = getJobsTableTab();
+    const visibleJobs = getVisibleJobsForTable(jobsTab);
+    const totalRows = jobsTab === 'past' ? Math.max(MIN_VISIBLE_PAST_ROWS, visibleJobs.length) : Math.max(MIN_VISIBLE_QUEUE_ROWS, visibleJobs.length);
 
     const queuedJobIds = state.jobs
-      .filter(job => String(job.status || '').toLowerCase() === 'queued')
+      .filter(job => normalizeJobStatus(job.status) === 'queued')
       .map(job => job.id);
     const activeJob = state.jobs.find(job => ['sending', 'printing'].includes(String(job.status || '').toLowerCase()));
     const activeJobId = activeJob?.id || null;
     const nextUpJobId = queuedJobIds[0] || null;
 
     for (let i = 0; i < totalRows; i += 1) {
-      const job = state.jobs[i];
+      const job = visibleJobs[i];
       if (!job) {
         rows.push(`<tr class="is-placeholder" aria-hidden="true">
           <td class="cell-job" aria-label="Empty queue row">—</td>
@@ -1217,10 +1281,10 @@ function render() {
       const fullJob = `${meta.id} · ${meta.name}`;
       const selected = selectedJobId === job.id;
       const queuePos = queuedJobIds.indexOf(job.id);
-      const queuePosLabel = queuePos >= 0 ? `#${queuePos + 1}` : '—';
+      const queuePosLabel = jobsTab === 'queued' && queuePos >= 0 ? `#${queuePos + 1}` : '—';
       const roleBadges = [];
-      if (job.id === activeJobId) roleBadges.push('<span class="job-badge is-active">Active</span>');
-      if (job.id === nextUpJobId) roleBadges.push('<span class="job-badge is-next">Next Up</span>');
+      if (jobsTab === 'queued' && job.id === activeJobId) roleBadges.push('<span class="job-badge is-active">Active</span>');
+      if (jobsTab === 'queued' && job.id === nextUpJobId) roleBadges.push('<span class="job-badge is-next">Next Up</span>');
       const roleBadgesHtml = roleBadges.length > 0 ? `<div class="job-badges">${roleBadges.join('')}</div>` : '';
       const statusLower = String(job.status || '').toLowerCase();
 
@@ -1460,6 +1524,7 @@ function render() {
   renderEligibility();
   renderImportantControls();
   syncTopTabUI();
+  syncJobsTableTabsUI();
   syncLeftSidebarTabUI();
   syncRightSidebarTabUI();
   syncJobArrangeTabUI();
@@ -4288,6 +4353,7 @@ function bindTopTabs() {
   }
 
   syncTopTabUI();
+  syncJobsTableTabsUI();
 }
 
 function bindLeftSidebarTabs() {
@@ -4302,6 +4368,40 @@ function bindRightSidebarTabs() {
 
 function bindJobArrangeTabs() {
   syncJobArrangeTabUI();
+}
+
+function bindJobsTableTabs() {
+  const tabs = ['queued', 'past'];
+  const queuedBtn = document.getElementById('btnJobsTabQueued');
+  const pastBtn = document.getElementById('btnJobsTabPast');
+
+  if (queuedBtn && typeof queuedBtn.addEventListener === 'function') {
+    queuedBtn.addEventListener('click', () => setJobsTableTab('queued'));
+  }
+  if (pastBtn && typeof pastBtn.addEventListener === 'function') {
+    pastBtn.addEventListener('click', () => setJobsTableTab('past'));
+  }
+
+  const tablist = document.getElementById('jobsTableTabs');
+  if (tablist && typeof tablist.addEventListener === 'function') {
+    tablist.addEventListener('keydown', event => {
+      const current = getJobsTableTab() === 'past' ? 1 : 0;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+        event.preventDefault();
+        const dir = event.key === 'ArrowRight' ? 1 : -1;
+        const next = (current + dir + tabs.length) % tabs.length;
+        setJobsTableTab(tabs[next], { focus: true });
+      } else if (event.key === 'Home') {
+        event.preventDefault();
+        setJobsTableTab('queued', { focus: true });
+      } else if (event.key === 'End') {
+        event.preventDefault();
+        setJobsTableTab('past', { focus: true });
+      }
+    });
+  }
+
+  syncJobsTableTabsUI();
 }
 
 function bind() {
@@ -4533,6 +4633,7 @@ function bind() {
   bindPdfInputs();
   bindPlacementControls();
   bindJobTableInteractions();
+  bindJobsTableTabs();
   bindTopTabs();
   bindLeftSidebarTabs();
   bindRightSidebarTabs();

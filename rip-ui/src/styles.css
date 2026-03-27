@@ -1335,6 +1335,34 @@ button[data-c][data-eligibility='blocked'] { box-shadow: 0 0 0 1px var(--danger)
   overflow: hidden;
 }
 
+.jobs-table-tabs {
+  display: inline-flex;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.jobs-table-tab-btn {
+  border: 1px solid var(--panel-edge);
+  background: #ffffff;
+  color: #5b2a31;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.jobs-table-tab-btn[aria-selected='true'] {
+  background: #7c121f;
+  color: #fff;
+  border-color: #7c121f;
+}
+
+.jobs-table-tab-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
 .queue-flow-summary {
   margin: 0 0 8px;
   padding: 6px 8px;

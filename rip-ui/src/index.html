@@ -44,11 +44,14 @@
       <section id="panelPrintheadControls" role="tabpanel" aria-labelledby="tabPrintheadControls" class="top-tab-panel">
         <div class="layout layout-printhead" aria-label="Printhead controls workspace">
           <div class="printhead-main-column" aria-label="Printhead queue and controls">
-            <section class="workflow-section control-card printhead-queue-card" aria-label="Queued jobs table">
-              <h3>Queued Jobs</h3>
+            <section class="workflow-section control-card printhead-queue-card" aria-label="Jobs table">
+              <div id="jobsTableTabs" class="jobs-table-tabs" role="tablist" aria-label="Jobs table view">
+                <button id="btnJobsTabQueued" class="jobs-table-tab-btn" role="tab" aria-selected="true" tabindex="0">Queued Jobs</button>
+                <button id="btnJobsTabPast" class="jobs-table-tab-btn" role="tab" aria-selected="false" tabindex="-1">Past Jobs</button>
+              </div>
               <div id="queueFlowSummary" class="queue-flow-summary" role="status" aria-live="polite">Auto-send OFF · 0 queued</div>
               <div class="jobs-table-wrap" role="region" aria-label="Jobs list" tabindex="0">
-                <table class="jobs-table" aria-label="Queued jobs">
+                <table class="jobs-table" aria-label="Jobs">
                   <thead>
                     <tr>
                       <th scope="col">Job</th>
