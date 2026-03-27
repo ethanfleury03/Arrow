@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 SCRIPT="/tmp/jsl_test/thrift_controller_fullcycle.py"
