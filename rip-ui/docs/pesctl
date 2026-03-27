@@ -283,13 +283,23 @@ client.open_connection()
 called = None
 for name in ('startPriming', 'prime', 'beginPriming'):
  fn = getattr(client, name, None)
- if callable(fn):
+ if not callable(fn):
+  continue
+ # Some PES builds require one argument (printUnits list), others none.
+ try:
   fn()
-  called = name
+  called = name + '()'
   break
+ except TypeError:
+  try:
+   fn([])
+   called = name + '([])'
+   break
+  except TypeError:
+   continue
 
 if not called:
- raise RuntimeError('no priming method available on KPesClient (tried startPriming, prime, beginPriming)')
+ raise RuntimeError('no compatible priming method signature on KPesClient (tried startPriming/prime/beginPriming with () and ([]))')
 
 print(json.dumps({
  'ok': True,
@@ -340,13 +350,23 @@ client.open_connection()
 called = None
 for name in ('startDepriming', 'deprime', 'beginDepriming'):
  fn = getattr(client, name, None)
- if callable(fn):
+ if not callable(fn):
+  continue
+ # Some PES builds require one argument (printUnits list), others none.
+ try:
   fn()
-  called = name
+  called = name + '()'
   break
+ except TypeError:
+  try:
+   fn([])
+   called = name + '([])'
+   break
+  except TypeError:
+   continue
 
 if not called:
- raise RuntimeError('no depriming method available on KPesClient (tried startDepriming, deprime, beginDepriming)')
+ raise RuntimeError('no compatible depriming method signature on KPesClient (tried startDepriming/deprime/beginDepriming with () and ([]))')
 
 print(json.dumps({
  'ok': True,
