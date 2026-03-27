@@ -393,6 +393,19 @@ h3 { margin: var(--space-2) 0 var(--space-1); font-size: 12px; font-weight: 700;
   max-width: none;
 }
 
+.cmd-note {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  border: 1px solid #c76370;
+  background: #fde9ec;
+  color: #6e0c17;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
 .bottom-control-card #queue {
   width: 100%;
 }

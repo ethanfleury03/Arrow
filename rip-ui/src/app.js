@@ -211,7 +211,7 @@ const COMMAND_GROUPS = Object.freeze({
   ],
   controlsPrint: [
     { command: 'print_prepare', label: 'Prepare to Print', bridgeMethod: 'prepareToPrint', pesctlOp: 'prepareToPrint' },
-    { command: 'print_pause', label: 'Pause', bridgeMethod: 'pausePrinting', pesctlOp: 'pausePrinting' },
+    { command: 'print_pause', label: 'Pause', note: 'SIM', noteTitle: 'Pause is currently shim/simulated in pesctl', bridgeMethod: 'pausePrinting', pesctlOp: 'pausePrinting' },
     { command: 'print_start', label: 'Start Print', bridgeMethod: 'startPrinting', pesctlOp: 'startPrinting' },
     { command: 'print_finish', label: 'Finish Printing', bridgeMethod: 'finishPrinting', pesctlOp: 'finishPrinting' }
   ]
@@ -4289,7 +4289,10 @@ function bind() {
         const cmd = COMMANDS.find(item => item.name === entry.command);
         if (!cmd) return '';
         const label = entry.label || cmd.label;
-        return `<button data-c="${cmd.name}" class="cmd-btn">${label}</button>`;
+        const noteHtml = entry.note
+          ? ` <span class="cmd-note" title="${entry.noteTitle || ''}">${entry.note}</span>`
+          : '';
+        return `<button data-c="${cmd.name}" class="cmd-btn">${label}${noteHtml}</button>`;
       })
       .join('');
   });
