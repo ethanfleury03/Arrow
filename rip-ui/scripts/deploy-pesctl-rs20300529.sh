@@ -11,10 +11,17 @@ if [[ ! -f "$LOCAL_SCRIPT" ]]; then
   exit 1
 fi
 
-LOCAL_SHA="$(shasum -a 256 "$LOCAL_SCRIPT" | awk '{print $1}')"
+TMP_SCRIPT="$(mktemp -t pesctl.deploy.XXXXXX)"
+trap 'rm -f "$TMP_SCRIPT"' EXIT
 
-echo "Deploying $LOCAL_SCRIPT -> ${REMOTE_HOST}:${REMOTE_PATH}"
-scp "$LOCAL_SCRIPT" "${REMOTE_HOST}:${REMOTE_PATH}"
+# Normalize to LF on deploy to prevent /bin/bash^M interpreter errors on Linux targets.
+# (Safe even when input already uses LF.)
+tr -d '\r' < "$LOCAL_SCRIPT" > "$TMP_SCRIPT"
+
+LOCAL_SHA="$(shasum -a 256 "$TMP_SCRIPT" | awk '{print $1}')"
+
+echo "Deploying $LOCAL_SCRIPT (LF-normalized) -> ${REMOTE_HOST}:${REMOTE_PATH}"
+scp "$TMP_SCRIPT" "${REMOTE_HOST}:${REMOTE_PATH}"
 ssh "$REMOTE_HOST" "chmod +x '$REMOTE_PATH'"
 
 REMOTE_SHA="$(ssh "$REMOTE_HOST" "if command -v sha256sum >/dev/null 2>&1; then sha256sum '$REMOTE_PATH' | awk '{print \$1}'; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 '$REMOTE_PATH' | awk '{print \$1}'; else echo NO_HASH_TOOL; fi")"
