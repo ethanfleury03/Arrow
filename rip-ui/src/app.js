@@ -187,6 +187,36 @@ const UI_COMMAND_SIM_MAP = {
   print_start: 'start',
   print_finish: 'finish'
 };
+// Authoritative control mappings (UI command -> bridge handler -> adapter -> pesctl --op)
+// Derived from bridge/server.js COMMAND_HANDLERS and docs/pesctl op_to_cmds.
+const COMMAND_GROUPS = Object.freeze({
+  controlsCleaning: [
+    { command: 'clean_light', label: 'Light' },
+    { command: 'clean_medium', label: 'Medium' },
+    { command: 'clean_heavy', label: 'Heavy' }
+  ],
+  controlsEngine: [
+    { command: 'engine_initialise', label: 'Initialise' },
+    { command: 'engine_shutdown', label: 'Shutdown' },
+    { command: 'engine_replace_wipers', label: 'Replace Wipers' }
+  ],
+  controlsPriming: [
+    { command: 'prime_begin', label: 'Begin Priming' },
+    { command: 'deprime_begin', label: 'Begin Depriming' }
+  ],
+  controlsHead: [
+    { command: 'head_cap', label: 'Cap' },
+    { command: 'head_raise', label: 'Raise' },
+    { command: 'head_print', label: 'Print' }
+  ],
+  controlsPrint: [
+    { command: 'print_prepare', label: 'Prepare to Print', bridgeMethod: 'prepareToPrint', pesctlOp: 'prepareToPrint' },
+    { command: 'print_pause', label: 'Pause', bridgeMethod: 'pausePrinting', pesctlOp: 'pausePrinting' },
+    { command: 'print_start', label: 'Start Print', bridgeMethod: 'startPrinting', pesctlOp: 'startPrinting' },
+    { command: 'print_finish', label: 'Finish Printing', bridgeMethod: 'finishPrinting', pesctlOp: 'finishPrinting' }
+  ]
+});
+
 const READ_ONLY_ACTIONS = [
   { id: 'btnTestCommand', label: 'Test Command' },
   { id: 'btnTestEvent', label: 'Test Event' },
@@ -4251,35 +4281,7 @@ function bindJobArrangeTabs() {
 }
 
 function bind() {
-  const commandGroups = {
-    controlsCleaning: [
-      { command: 'clean_light', label: 'Light' },
-      { command: 'clean_medium', label: 'Medium' },
-      { command: 'clean_heavy', label: 'Heavy' }
-    ],
-    controlsEngine: [
-      { command: 'engine_initialise', label: 'Initialise' },
-      { command: 'engine_shutdown', label: 'Shutdown' },
-      { command: 'engine_replace_wipers', label: 'Replace Wipers' }
-    ],
-    controlsPriming: [
-      { command: 'prime_begin', label: 'Begin Priming' },
-      { command: 'deprime_begin', label: 'Begin Depriming' }
-    ],
-    controlsHead: [
-      { command: 'head_cap', label: 'Cap' },
-      { command: 'head_raise', label: 'Raise' },
-      { command: 'head_print', label: 'Print' }
-    ],
-    controlsPrint: [
-      { command: 'print_prepare', label: 'Prepare to Print' },
-      { command: 'print_pause', label: 'Pause' },
-      { command: 'print_start', label: 'Start Print' },
-      { command: 'print_finish', label: 'Finish Printing' }
-    ]
-  };
-
-  Object.entries(commandGroups).forEach(([containerId, entries]) => {
+  Object.entries(COMMAND_GROUPS).forEach(([containerId, entries]) => {
     const container = document.getElementById(containerId);
     if (!container) return;
     container.innerHTML = entries
