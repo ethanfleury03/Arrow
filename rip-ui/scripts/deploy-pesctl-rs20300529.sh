@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOCAL_SCRIPT="$ROOT_DIR/docs/pesctl-canonical-rs20300529.sh"
+LOCAL_SCRIPT="$ROOT_DIR/docs/pesctl"
 REMOTE_HOST="root@192.168.100.200"
 REMOTE_PATH="/usr/local/bin/pesctl"
 
@@ -11,18 +11,10 @@ if [[ ! -f "$LOCAL_SCRIPT" ]]; then
   exit 1
 fi
 
-TMP_SCRIPT="$(mktemp -t pesctl.deploy.XXXXXX)"
-trap 'rm -f "$TMP_SCRIPT"' EXIT
+LOCAL_SHA="$(tr -d '\r' < "$LOCAL_SCRIPT" | shasum -a 256 | awk '{print $1}')"
 
-# Normalize to LF on deploy to prevent /bin/bash^M interpreter errors on Linux targets.
-# (Safe even when input already uses LF.)
-tr -d '\r' < "$LOCAL_SCRIPT" > "$TMP_SCRIPT"
-
-LOCAL_SHA="$(shasum -a 256 "$TMP_SCRIPT" | awk '{print $1}')"
-
-echo "Deploying $LOCAL_SCRIPT (LF-normalized) -> ${REMOTE_HOST}:${REMOTE_PATH}"
-scp "$TMP_SCRIPT" "${REMOTE_HOST}:${REMOTE_PATH}"
-ssh "$REMOTE_HOST" "chmod +x '$REMOTE_PATH'"
+echo "Deploying $LOCAL_SCRIPT -> ${REMOTE_HOST}:${REMOTE_PATH}"
+tr -d '\r' < "$LOCAL_SCRIPT" | ssh "$REMOTE_HOST" "cat > '$REMOTE_PATH' && chmod +x '$REMOTE_PATH'"
 
 REMOTE_SHA="$(ssh "$REMOTE_HOST" "if command -v sha256sum >/dev/null 2>&1; then sha256sum '$REMOTE_PATH' | awk '{print \$1}'; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 '$REMOTE_PATH' | awk '{print \$1}'; else echo NO_HASH_TOOL; fi")"
 
