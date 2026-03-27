@@ -188,59 +188,59 @@ cmd_port = int(os.environ.get('CMD_PORT', '13001'))
 
 payload = {}
 if args_b64:
- try:
-  decoded = base64.b64decode(args_b64)
-  payload = json.loads(decoded)
- except Exception:
-  payload = {}
+    try:
+        decoded = base64.b64decode(args_b64)
+        payload = json.loads(decoded)
+    except Exception:
+        payload = {}
 
 print_units = payload.get('printUnits')
 if print_units is None:
- for k in ('print_units', 'units'):
- if k in payload:
- print_units = payload.get(k)
- break
+    for k in ('print_units', 'units'):
+        if k in payload:
+            print_units = payload.get(k)
+            break
 if print_units is None:
- print_units = []
+    print_units = []
 if not isinstance(print_units, list):
- raise RuntimeError('startMovingPrintheads requires printUnits as an array')
+    raise RuntimeError('startMovingPrintheads requires printUnits as an array')
 
 position = payload.get('positionEnum')
 if position is None:
- for k in ('position', 'printheadPosition', 'printhead_position'):
- v = payload.get(k)
- if v is not None:
- position = v
- break
+    for k in ('position', 'printheadPosition', 'printhead_position'):
+        v = payload.get(k)
+        if v is not None:
+            position = v
+            break
 
 if position is None:
- raise RuntimeError('startMovingPrintheads requires positionEnum/position (raised|capped|print)')
+    raise RuntimeError('startMovingPrintheads requires positionEnum/position (raised|capped|print)')
 
 # Accept either numeric enum or string alias.
 # Bridge mapping must be: raised=0, capped=1, print=2
 if isinstance(position, (int, long)):
- pos_enum = int(position)
+    pos_enum = int(position)
 else:
- pnorm = str(position).strip().lower()
- map_str = {
- 'raised': 0,
- 'capped': 1,
- 'print': 2,
- }
- if pnorm not in map_str:
- raise RuntimeError('unsupported printhead position: {}'.format(position))
- pos_enum = map_str[pnorm]
+    pnorm = str(position).strip().lower()
+    map_str = {
+        'raised': 0,
+        'capped': 1,
+        'print': 2,
+    }
+    if pnorm not in map_str:
+        raise RuntimeError('unsupported printhead position: {}'.format(position))
+    pos_enum = map_str[pnorm]
 
 client = KPesClient(host=host)
 client.open_connection()
 client.startMovingPrintheads(print_units, pos_enum)
 print(json.dumps({
-'ok': True,
-'operation': op,
-'host': host,
-'commandPort': cmd_port,
-'exitCode': 0,
-'output': 'startMovingPrintheads sent (enum={})'.format(pos_enum)
+    'ok': True,
+    'operation': op,
+    'host': host,
+    'commandPort': cmd_port,
+    'exitCode': 0,
+    'output': 'startMovingPrintheads sent (enum={})'.format(pos_enum)
 }))
 PY
 )" || RC=$?
