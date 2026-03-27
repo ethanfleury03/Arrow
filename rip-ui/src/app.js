@@ -164,9 +164,6 @@ const COMMANDS = [
   { name: 'head_cap', mutating: true, label: 'Cap', priority: 'secondary' },
   { name: 'head_raise', mutating: true, label: 'Raise', priority: 'secondary' },
   { name: 'head_print', mutating: true, label: 'Print', priority: 'secondary' },
-  { name: 'print_prepare', mutating: true, label: 'Prepare to Print', priority: 'primary' },
-  { name: 'print_pause', mutating: true, label: 'Pause', priority: 'secondary' },
-  { name: 'print_start', mutating: true, label: 'Start Print', priority: 'primary' },
   { name: 'print_finish', mutating: true, label: 'Finish Printing', priority: 'primary' }
 ];
 
@@ -182,9 +179,6 @@ const UI_COMMAND_SIM_MAP = {
   head_cap: 'finish',
   head_raise: 'prepare',
   head_print: 'start',
-  print_prepare: 'prepare',
-  print_pause: 'shutdown',
-  print_start: 'start',
   print_finish: 'finish'
 };
 // Authoritative control mappings (UI command -> bridge handler -> adapter -> pesctl --op)
@@ -210,9 +204,6 @@ const COMMAND_GROUPS = Object.freeze({
     { command: 'head_print', label: 'Print' }
   ],
   controlsPrint: [
-    { command: 'print_prepare', label: 'Prepare to Print', bridgeMethod: 'prepareToPrint', pesctlOp: 'prepareToPrint' },
-    { command: 'print_pause', label: 'Pause', note: 'SIM', noteTitle: 'Pause is currently shim/simulated in pesctl', bridgeMethod: 'pausePrinting', pesctlOp: 'pausePrinting' },
-    { command: 'print_start', label: 'Start Print', bridgeMethod: 'startPrinting', pesctlOp: 'startPrinting' },
     { command: 'print_finish', label: 'Finish Printing', bridgeMethod: 'finishPrinting', pesctlOp: 'finishPrinting' }
   ]
 });
@@ -3920,21 +3911,6 @@ function computeEligibility(command) {
     }
   }
 
-  if (normalizedCommand === 'print_prepare' && state.jobs.every(j => j.status !== 'queued')) {
-    checks.push({
-      level: 'warn',
-      message: 'No queued jobs detected for prepare-to-print.',
-      remediation: 'Queue a job if this prepare is for active production output.'
-    });
-  }
-
-  if (normalizedCommand === 'print_start' && !state.preflight.passed) {
-    checks.push({
-      level: 'warn',
-      message: 'Preflight has not passed for this session.',
-      remediation: 'Run preflight checks before production start when possible.'
-    });
-  }
 
   const engine = String(state.liveStatus.engineState || 'UNKNOWN').toUpperCase();
   if (['FAULT', 'ERROR', 'NOT_READY'].includes(engine)) {

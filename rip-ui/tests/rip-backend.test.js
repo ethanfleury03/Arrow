@@ -45,7 +45,7 @@ async function run() {
     }
     if (req.method === 'POST' && req.url === '/api/device/run-command') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ accepted: true, command: 'print_prepare', source: 'bridge-http' }));
+      res.end(JSON.stringify({ accepted: true, command: 'print_finish', source: 'bridge-http' }));
       return;
     }
     res.writeHead(404, { 'content-type': 'application/json' });
@@ -95,7 +95,7 @@ async function run() {
         entry.mappedEngineState === 'IDLE'
       )));
 
-      const result = await backend.runCommand({ command: 'print_prepare', config: { host: '127.0.0.1', commandPort: 13002 } });
+      const result = await backend.runCommand({ command: 'print_finish', config: { host: '127.0.0.1', commandPort: 13002 } });
       assert.equal(result.accepted, true);
     } finally {
       if (typeof originalDebug === 'string') process.env.RIP_STATUS_DEBUG = originalDebug;
@@ -152,7 +152,7 @@ async function run() {
     });
 
     await assert.rejects(
-      () => backend.runCommand({ command: 'print_prepare', config: { host: '127.0.0.1', commandPort: 13002 } }),
+      () => backend.runCommand({ command: 'print_finish', config: { host: '127.0.0.1', commandPort: 13002 } }),
       error => error.code === 'COMMAND_REJECTED_SIMULATED'
     );
   });

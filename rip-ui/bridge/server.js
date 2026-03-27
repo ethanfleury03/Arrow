@@ -36,9 +36,6 @@ const COMMAND_HANDLERS = {
   head_cap: adapter => adapter.startMovingPrintheads({ printUnits: DEFAULT_PRINT_UNITS, position: 'capped' }),
   head_raise: adapter => adapter.startMovingPrintheads({ printUnits: DEFAULT_PRINT_UNITS, position: 'raised' }),
   head_print: adapter => adapter.startMovingPrintheads({ printUnits: DEFAULT_PRINT_UNITS, position: 'print' }),
-  print_prepare: adapter => adapter.prepareToPrint({}),
-  print_pause: adapter => adapter.pausePrinting({}),
-  print_start: adapter => adapter.startPrinting({}),
   print_finish: adapter => adapter.finishPrinting({})
 };
 
