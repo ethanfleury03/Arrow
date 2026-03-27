@@ -135,6 +135,7 @@ const INITIAL_STATE = {
     rightSidebarTab: 'live',
     jobArrangeTab: 'arrange',
     jobsTableTab: 'queued',
+    pastJobsFilter: 'all',
     arrange: {
       gapHorizontalMm: 0,
       gapVerticalMm: 0,
@@ -1023,6 +1024,24 @@ function getJobsTableTab() {
   return tab === 'past' ? 'past' : 'queued';
 }
 
+function getPastJobsFilter() {
+  const value = String(state.ui?.pastJobsFilter || 'all').toLowerCase();
+  return ['all', 'completed', 'failed', 'cancelled'].includes(value) ? value : 'all';
+}
+
+function isRetryablePastStatus(status) {
+  const normalized = normalizeJobStatus(status);
+  return ['failed', 'error', 'cancelled'].includes(normalized);
+}
+
+function classifyPastJobFilter(status) {
+  const normalized = normalizeJobStatus(status);
+  if (normalized === 'cancelled') return 'cancelled';
+  if (['failed', 'error'].includes(normalized)) return 'failed';
+  if (['done', 'completed'].includes(normalized)) return 'completed';
+  return null;
+}
+
 function setJobsTableTab(nextTab, { focus = false } = {}) {
   const tab = nextTab === 'past' ? 'past' : 'queued';
   if (!state.ui) state.ui = deepClone(INITIAL_STATE.ui);
@@ -1033,6 +1052,16 @@ function setJobsTableTab(nextTab, { focus = false } = {}) {
     const focusEl = document.getElementById(tab === 'past' ? 'btnJobsTabPast' : 'btnJobsTabQueued');
     focusEl?.focus();
   }
+  persistState();
+}
+
+function setPastJobsFilter(nextFilter) {
+  const filter = ['completed', 'failed', 'cancelled'].includes(String(nextFilter || '').toLowerCase())
+    ? String(nextFilter).toLowerCase()
+    : 'all';
+  if (!state.ui) state.ui = deepClone(INITIAL_STATE.ui);
+  state.ui.pastJobsFilter = filter;
+  render();
   persistState();
 }
 
@@ -1054,8 +1083,10 @@ function syncJobsTableTabsUI() {
 
 function getVisibleJobsForTable(tab = getJobsTableTab()) {
   if (tab === 'past') {
+    const selectedFilter = getPastJobsFilter();
     return state.jobs
       .filter(job => isTerminalJobStatus(job.status))
+      .filter(job => selectedFilter === 'all' || classifyPastJobFilter(job.status) === selectedFilter)
       .slice()
       .sort((a, b) => {
         const ta = Date.parse(a.finishedAt || a.completedAt || a.updatedAt || a.createdAt || 0) || 0;
@@ -1249,6 +1280,24 @@ function render() {
       : `Auto-send OFF · ${queuedCount} queued`;
   }
 
+  const jobsActionHeader = document.getElementById('jobsActionHeader');
+  if (jobsActionHeader) jobsActionHeader.textContent = getJobsTableTab() === 'past' ? 'Action' : 'Action';
+
+  const pastJobsFilters = document.getElementById('pastJobsFilters');
+  if (pastJobsFilters) {
+    pastJobsFilters.hidden = getJobsTableTab() !== 'past';
+    const selected = getPastJobsFilter();
+    if (typeof pastJobsFilters.querySelectorAll === 'function') {
+      Array.from(pastJobsFilters.querySelectorAll('button[data-past-filter]')).forEach(btn => {
+        const active = btn.dataset.pastFilter === selected;
+        if (typeof btn.setAttribute === 'function') {
+          btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        }
+        if (btn.dataset) btn.dataset.active = active ? 'true' : 'false';
+      });
+    }
+  }
+
   const jobTable = document.getElementById('jobTable');
   if (jobTable) {
     const rows = [];
@@ -1273,6 +1322,7 @@ function render() {
           <td class="cell-mode">—</td>
           <td class="cell-count">—</td>
           <td class="cell-status">—</td>
+          <td class="cell-action">—</td>
         </tr>`);
         continue;
       }
@@ -1288,6 +1338,11 @@ function render() {
       const roleBadgesHtml = roleBadges.length > 0 ? `<div class="job-badges">${roleBadges.join('')}</div>` : '';
       const statusLower = String(job.status || '').toLowerCase();
 
+      const canRetry = jobsTab === 'past' && isRetryablePastStatus(job.status) && Boolean(job.inputPath);
+      const actionHtml = canRetry
+        ? `<button class="btn-retry-job" data-action="retry-job" data-job-id="${escapeHtml(job.id)}" title="Queue a retry for this job">Retry</button>`
+        : '—';
+
       rows.push(`<tr data-job-id="${escapeHtml(job.id)}" tabindex="0" role="button" aria-label="Select job ${escapeHtml(fullJob)}" aria-selected="${selected ? 'true' : 'false'}" class="${selected ? 'is-selected' : ''}">
         <td class="cell-job" title="${escapeHtml(fullJob)}">${escapeHtml(fullJob)}${roleBadgesHtml}</td>
         <td class="cell-position" title="Queue position">${escapeHtml(queuePosLabel)}</td>
@@ -1295,6 +1350,7 @@ function render() {
         <td class="cell-mode" title="${escapeHtml(meta.mode)}">${escapeHtml(meta.mode)}</td>
         <td class="cell-count" title="${escapeHtml(meta.count)}">${escapeHtml(meta.count)}</td>
         <td class="cell-status"><span class="status-pill status-${escapeHtml(statusLower)}" title="${escapeHtml(meta.status)}">${escapeHtml(meta.status)}</span></td>
+        <td class="cell-action">${actionHtml}</td>
       </tr>`);
     }
 
@@ -4263,6 +4319,38 @@ function applyArrangeInputs() {
 }
 
 
+function retryPastJob(jobId) {
+  const sourceJob = state.jobs.find(job => job.id === jobId);
+  if (!sourceJob || !isRetryablePastStatus(sourceJob.status)) {
+    log(`Retry skipped: job ${jobId} is not in a retryable past state.`);
+    return;
+  }
+
+  if (!sourceJob.inputPath) {
+    log(`Retry blocked for ${jobId}: missing local file path/inputPath.`);
+    return;
+  }
+
+  const copies = Math.max(1, Math.floor(Number(sourceJob.copies || 1)));
+  const retriedJobId = generateJobId();
+  state.jobs.push({
+    id: retriedJobId,
+    bridgeJobId: null,
+    name: sourceJob.name || state.artwork.name || `job_${retriedJobId}.pdf`,
+    status: 'queued',
+    copies,
+    inputPath: sourceJob.inputPath,
+    createdAt: new Date().toISOString(),
+    retryOf: sourceJob.id
+  });
+  refreshQueueDepth();
+  state.queue.push(`retry(${retriedJobId}) from ${sourceJob.id}`);
+  log(`Retried ${sourceJob.id} as ${retriedJobId} (${copies} copies).`);
+  tryAutoDispatchNextJob('retry-past-job');
+  render();
+  persistState();
+}
+
 function selectJobRow(jobId) {
   if (!jobId) return;
   if (!state.ui) state.ui = deepClone(INITIAL_STATE.ui);
@@ -4276,6 +4364,14 @@ function bindJobTableInteractions() {
   if (!table || typeof table.addEventListener !== 'function') return;
 
   table.addEventListener('click', event => {
+    const retryBtn = event.target?.closest?.('button[data-action="retry-job"][data-job-id]');
+    if (retryBtn) {
+      event.preventDefault();
+      event.stopPropagation?.();
+      retryPastJob(retryBtn.dataset.jobId);
+      return;
+    }
+
     const row = event.target?.closest?.('tr[data-job-id]');
     if (!row) return;
     selectJobRow(row.dataset.jobId);
@@ -4353,6 +4449,15 @@ function bindTopTabs() {
   }
 
   syncTopTabUI();
+  const filterContainer = document.getElementById('pastJobsFilters');
+  if (filterContainer && typeof filterContainer.addEventListener === 'function') {
+    filterContainer.addEventListener('click', event => {
+      const btn = event.target?.closest?.('button[data-past-filter]');
+      if (!btn) return;
+      setPastJobsFilter(btn.dataset.pastFilter || 'all');
+    });
+  }
+
   syncJobsTableTabsUI();
 }
 

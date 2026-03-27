@@ -113,19 +113,40 @@ function boot(preloadedState) {
   const initialHtml = h.elements.jobTable.innerHTML;
   assert(initialHtml.includes('JOB-0001'), 'queued tab should show active jobs by default');
 
-  // Drive at least one job to terminal state via deterministic simulation.
-  h.elements.btnRunSimulation.click();
+  // Force bridge-unavailable auto dispatch path to produce a failed terminal job.
+  h.elements.btnAutoSendToggle.click();
 
   h.elements.btnJobsTabPast.click();
   const pastHtml = h.elements.jobTable.innerHTML;
-  assert(pastHtml.includes('JOB-0001'), 'past tab should show terminal jobs after lifecycle completion');
+  assert(pastHtml.includes('JOB-0001'), 'past tab should show terminal jobs');
 
-  h.elements.btnJobsTabQueued.click();
-  const queuedHtml = h.elements.jobTable.innerHTML;
-  assert(!queuedHtml.includes('JOB-0001'), 'queued tab should hide terminal jobs');
+  h.elements.pastJobsFilters.dispatchEvent('click', {
+    target: {
+      closest(selector) {
+        if (selector === 'button[data-past-filter]') return { dataset: { pastFilter: 'failed' } };
+        return null;
+      }
+    }
+  });
+
+  const filteredHtml = h.elements.jobTable.innerHTML;
+  assert(filteredHtml.includes('JOB-0001'), 'failed filter should keep failed jobs visible');
+
+  h.elements.jobTable.dispatchEvent('click', {
+    preventDefault() {},
+    stopPropagation() {},
+    target: {
+      closest(selector) {
+        if (selector === 'button[data-action="retry-job"][data-job-id]') return { dataset: { jobId: 'JOB-0001' } };
+        return null;
+      }
+    }
+  });
 
   const persisted = h.getState();
-  assert.equal(persisted.ui.jobsTableTab, 'queued', 'selected jobs tab should persist to local state');
+  assert(persisted.jobs.some(job => job.id === 'JOB-0001' && job.status === 'failed'), 'original failed job should remain in history');
+  assert.equal(persisted.ui.jobsTableTab, 'past', 'selected jobs tab should persist to local state');
+  assert.equal(persisted.ui.pastJobsFilter, 'failed', 'selected past jobs filter should persist');
 
   console.log('PASS jobs-tabs-ui');
 })();

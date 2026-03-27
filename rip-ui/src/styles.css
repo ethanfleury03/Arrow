@@ -1373,6 +1373,44 @@ button[data-c][data-eligibility='blocked'] { box-shadow: 0 0 0 1px var(--danger)
   color: #6d1e27;
 }
 
+
+.past-jobs-filters {
+  display: inline-flex;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.past-jobs-filters button {
+  border: 1px solid var(--panel-edge);
+  background: #fff;
+  color: #5b2a31;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.past-jobs-filters button[aria-pressed='true'] {
+  background: #7c121f;
+  color: #fff;
+  border-color: #7c121f;
+}
+
+.btn-retry-job {
+  border: 1px solid #c99199;
+  background: #fff;
+  color: #7c121f;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-retry-job:hover {
+  background: #fff2f4;
+}
+
 .jobs-table-wrap {
   flex: 1;
   min-height: 0;
@@ -1451,7 +1489,8 @@ button[data-c][data-eligibility='blocked'] { box-shadow: 0 0 0 1px var(--danger)
 .jobs-table .cell-size { width: 14%; }
 .jobs-table .cell-mode { width: 14%; text-transform: capitalize; }
 .jobs-table .cell-count { width: 10%; }
-.jobs-table .cell-status { width: 18%; }
+.jobs-table .cell-status { width: 16%; }
+.jobs-table .cell-action { width: 12%; }
 
 .job-badges {
   display: inline-flex;

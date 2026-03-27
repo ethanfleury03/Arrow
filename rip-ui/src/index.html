@@ -50,6 +50,12 @@
                 <button id="btnJobsTabPast" class="jobs-table-tab-btn" role="tab" aria-selected="false" tabindex="-1">Past Jobs</button>
               </div>
               <div id="queueFlowSummary" class="queue-flow-summary" role="status" aria-live="polite">Auto-send OFF · 0 queued</div>
+              <div id="pastJobsFilters" class="past-jobs-filters" hidden>
+                <button type="button" data-past-filter="all" aria-pressed="true">All</button>
+                <button type="button" data-past-filter="completed" aria-pressed="false">Completed</button>
+                <button type="button" data-past-filter="failed" aria-pressed="false">Failed</button>
+                <button type="button" data-past-filter="cancelled" aria-pressed="false">Cancelled</button>
+              </div>
               <div class="jobs-table-wrap" role="region" aria-label="Jobs list" tabindex="0">
                 <table class="jobs-table" aria-label="Jobs">
                   <thead>
@@ -60,6 +66,7 @@
                       <th scope="col">Mode</th>
                       <th scope="col">Count</th>
                       <th scope="col">Status</th>
+                      <th scope="col" id="jobsActionHeader">Action</th>
                     </tr>
                   </thead>
                   <tbody id="jobTable"></tbody>
