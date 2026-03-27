@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { AdapterCapabilityError } = require('./memjet-adapter');
+const { SqliteStore } = require('./storage');
 
 function isIgnorableInitialiseError(error) {
   const msg = String(error?.message || '').toLowerCase();
@@ -20,7 +21,7 @@ const JOB_STATES = {
 };
 
 class JobManager {
-  constructor({ adapter, logger, emit, dataDir }) {
+  constructor({ adapter, logger, emit, dataDir, store }) {
     this.adapter = adapter;
     this.logger = logger;
     this.emit = emit;
@@ -33,6 +34,35 @@ class JobManager {
     fs.mkdirSync(this.jobsDir, { recursive: true });
     fs.mkdirSync(this.artifactsDir, { recursive: true });
     this.deviceState = { engine: 'idle', connected: false, lastUpdate: new Date().toISOString() };
+
+    // Initialize SQLite store
+    if (store) {
+      this.store = store;
+    } else {
+      const dbPath = path.join(this.dataDir, 'rip.db');
+      this.store = new SqliteStore({ dbPath, logger });
+      this.store.migrate();
+    }
+
+    // Load existing jobs from DB
+    this._loadJobsFromStore();
+  }
+
+  _loadJobsFromStore() {
+    try {
+      const jobs = this.store.getAllJobs();
+      for (const job of jobs) {
+        this.jobs.set(job.jobId, job);
+        if (job.state === JOB_STATES.QUEUED || job.state === JOB_STATES.PREPARING || job.state === JOB_STATES.PRINTING) {
+          if (!this.queue.includes(job.jobId)) {
+            this.queue.push(job.jobId);
+          }
+        }
+      }
+      this.logger.info({ msg: 'jobManager.loadedJobs', count: jobs.length, queued: this.queue.length });
+    } catch (error) {
+      this.logger.error({ msg: 'jobManager.loadJobsFailed', error: error.message });
+    }
   }
 
   createJob(payload = {}) {
@@ -92,30 +122,57 @@ class JobManager {
       mimeType: payload.mimeType || 'application/octet-stream'
     };
     this.persistJob(job);
+    this.store.updateJobIngest(job.jobId, job.ingest);
     return job;
   }
 
   persistJob(job) {
-    const out = path.join(this.jobsDir, `${job.jobId}.json`);
-    fs.writeFileSync(out, JSON.stringify(job, null, 2));
+    // Write to both SQLite and JSON file for backward compatibility
+    try {
+      const existing = this.store.getJob(job.jobId);
+      if (existing) {
+        this.store.updateJob(job);
+      } else {
+        this.store.createJob(job);
+      }
+    } catch (error) {
+      this.logger.error({ msg: 'job.persist.sqliteFailed', jobId: job.jobId, error: error.message });
+    }
+
+    // Keep JSON backup for backward compatibility
+    try {
+      const out = path.join(this.jobsDir, `${job.jobId}.json`);
+      fs.writeFileSync(out, JSON.stringify(job, null, 2));
+    } catch (error) {
+      this.logger.error({ msg: 'job.persist.jsonFailed', jobId: job.jobId, error: error.message });
+    }
   }
 
   getJob(jobId) { return this.jobs.get(jobId) || null; }
   getQueue() { return this.queue.map(id => this.jobs.get(id)).filter(Boolean); }
 
   transition(job, nextState, extra = {}) {
+    const prevState = job.state;
     job.state = nextState;
     job.updatedAt = new Date().toISOString();
     job.history.push({ at: job.updatedAt, state: nextState, ...extra });
     this.emit('job.updated', { jobId: job.jobId, runId: job.runId, state: job.state, extra });
-    this.logger.info({ msg: 'job.transition', jobId: job.jobId, runId: job.runId, state: nextState, extra });
+    this.logger.info({ msg: 'job.transition', jobId: job.jobId, runId: job.runId, from: prevState, to: nextState, extra });
     this.persistJob(job);
+
+    // Record job event in DB
+    try {
+      this.store.recordJobEvent(job.jobId, job.runId, nextState, { from: prevState, ...extra });
+    } catch (error) {
+      this.logger.error({ msg: 'job.event.recordFailed', jobId: job.jobId, error: error.message });
+    }
   }
 
   async sendJob(jobId, { copies = 1 } = {}) {
     const job = this.getJob(jobId);
     if (!job) throw new Error(`Job ${jobId} not found`);
 
+    // Idempotency: prevent concurrent sends of the same job
     if (this.activeSends.has(jobId)) {
       return this.activeSends.get(jobId);
     }
@@ -231,6 +288,11 @@ class JobManager {
     };
     this.emit('device.updated', this.deviceState);
     return this.deviceState;
+  }
+
+  // Expose store for external access (commands, audit, etc.)
+  getStore() {
+    return this.store;
   }
 }
 

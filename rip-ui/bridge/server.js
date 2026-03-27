@@ -322,6 +322,51 @@ function createBridgeServer(options = {}) {
     }
   });
 
+  // Get store reference for logging
+  const store = manager.getStore();
+
+  // Wrap logger to also write to audit_log
+  const originalInfo = logger.info.bind(logger);
+  const originalError = logger.error.bind(logger);
+  const originalWarn = logger.warn.bind(logger);
+  const originalDebug = logger.debug.bind(logger);
+
+  logger.info = (payload) => {
+    originalInfo(payload);
+    try {
+      if (store && payload.msg) {
+        store.appendAudit('info', payload.msg, { ...payload, msg: undefined });
+      }
+    } catch {}
+  };
+
+  logger.error = (payload) => {
+    originalError(payload);
+    try {
+      if (store && payload.msg) {
+        store.appendAudit('error', payload.msg, { ...payload, msg: undefined });
+      }
+    } catch {}
+  };
+
+  logger.warn = (payload) => {
+    originalWarn(payload);
+    try {
+      if (store && payload.msg) {
+        store.appendAudit('warn', payload.msg, { ...payload, msg: undefined });
+      }
+    } catch {}
+  };
+
+  logger.debug = (payload) => {
+    originalDebug(payload);
+    try {
+      if (store && payload.msg) {
+        store.appendAudit('debug', payload.msg, { ...payload, msg: undefined });
+      }
+    } catch {}
+  };
+
   let statusPollTimer = null;
   let statusPollInFlight = false;
   let lastStatusSignature = '';
@@ -411,6 +456,24 @@ function createBridgeServer(options = {}) {
       if (signature !== lastStatusSignature) {
         lastStatusSignature = signature;
         emitSystemState(snapshot);
+
+        // Persist device status snapshot to DB (throttled to on-change)
+        try {
+          if (store) {
+            store.recordDeviceStatus({
+              engineState: snapshot.engineState,
+              engineStateRawNumeric: snapshot.engineStateRawNumeric,
+              engineStateRawLabel: snapshot.engineStateRawLabel,
+              queueLength: snapshot.queueLength,
+              inkLevels: snapshot.inkLevels,
+              connected: snapshot.connected,
+              degraded: snapshot.degraded,
+              details: status?.details || null
+            });
+          }
+        } catch (e) {
+          logger.error({ msg: 'bridge.status.snapshot.failed', error: e.message });
+        }
       }
     } catch (error) {
       const fallback = {
@@ -549,20 +612,58 @@ function createBridgeServer(options = {}) {
           args: commandMeta?.args || []
         });
 
+        const startTime = Date.now();
         let result;
+        let commandAccepted = true;
+        let commandError = null;
+
         try {
           result = await handler(adapter);
         } catch (error) {
           const classified = classifyCommandRuntimeError(error, command);
           if (classified) {
             logger.error({ msg: 'bridge.command.runtime_mismatch', command, err: error?.message || String(error) });
+            commandAccepted = false;
+            commandError = { message: error?.message, code: classified.payload?.error };
+
+            // Log failed command to DB
+            try {
+              if (store) {
+                store.recordCommand({
+                  command,
+                  jobId: body.jobId || null,
+                  accepted: false,
+                  result: null,
+                  error: commandError,
+                  durationMs: Date.now() - startTime
+                });
+              }
+            } catch {}
+
             return json(res, classified.status, classified.payload);
           }
+          commandAccepted = false;
+          commandError = { message: error?.message };
           throw error;
         }
 
         if (command.startsWith('head_') && hasSimulatedSignal(result)) {
           logger.error({ msg: 'bridge.command.rejected_simulated', command, result });
+
+          // Log rejected simulated command to DB
+          try {
+            if (store) {
+              store.recordCommand({
+                command,
+                jobId: body.jobId || null,
+                accepted: false,
+                result: result || null,
+                error: { message: 'simulated_response_rejected' },
+                durationMs: Date.now() - startTime
+              });
+            }
+          } catch {}
+
           return json(res, 409, {
             accepted: false,
             error: 'simulated_response_rejected',
@@ -573,6 +674,20 @@ function createBridgeServer(options = {}) {
             source: 'bridge-http'
           });
         }
+
+        // Log successful command to DB
+        try {
+          if (store) {
+            store.recordCommand({
+              command,
+              jobId: body.jobId || null,
+              accepted: true,
+              result: result || null,
+              error: null,
+              durationMs: Date.now() - startTime
+            });
+          }
+        } catch {}
 
         return json(res, 200, {
           accepted: true,

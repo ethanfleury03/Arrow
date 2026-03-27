@@ -89,6 +89,7 @@
     "electron-builder": "^24.13.3"
   },
   "dependencies": {
+    "better-sqlite3": "^12.8.0",
     "three": "^0.152.2",
     "thrift": "^0.22.0"
   }
