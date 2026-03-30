@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
-const { runSshSelfCheck, buildSshArgs, buildSshSettings } = require('../bridge/real-client-factory.local');
+const { runSshSelfCheck, buildSshArgs, buildSshSettings, isSshConfigured } = require('../bridge/real-client-factory.local');
+const { loadBridgeConfig } = require('../bridge/config');
 
 function testBuildSshArgsStructure() {
   const settings = {
@@ -152,12 +153,117 @@ async function testSelfCheckReturnsResultShape() {
   console.log('  ✓ testSelfCheckReturnsResultShape');
 }
 
+function testBridgeCheckReusesStartupConfig() {
+  // Verify that self-check uses the same config loading path as bridge:start
+  // by checking that loadBridgeConfig is importable and returns expected structure
+  const config = loadBridgeConfig(process.env);
+
+  // Config must have memjet section with host/ports
+  assert.ok(typeof config === 'object', 'loadBridgeConfig must return an object');
+  assert.ok(typeof config.memjet === 'object', 'config.memjet must be an object');
+  assert.ok(typeof config.memjet.host === 'string', 'config.memjet.host must be a string');
+  assert.ok(typeof config.memjet.commandPort === 'number', 'config.memjet.commandPort must be a number');
+  assert.ok(typeof config.memjet.eventPort === 'number', 'config.memjet.eventPort must be a number');
+  assert.ok(typeof config.memjet.dataPort === 'number', 'config.memjet.dataPort must be a number');
+
+  // buildSshSettings should use config.memjet values
+  const settings = buildSshSettings({
+    host: config.memjet.host,
+    commandPort: config.memjet.commandPort,
+    eventPort: config.memjet.eventPort,
+    dataPort: config.memjet.dataPort
+  });
+
+  // Settings should inherit defaults from config
+  assert.ok(typeof settings === 'object', 'buildSshSettings must return an object');
+  assert.ok(typeof settings.sshHost === 'string', 'settings.sshHost must be a string');
+  assert.ok(typeof settings.cmdTemplate === 'string', 'settings.cmdTemplate must have default value');
+
+  console.log('  ✓ testBridgeCheckReusesStartupConfig');
+}
+
+function testNoSkipWithConfiguredDefaults() {
+  // Test that SSH check does NOT skip when using default cmdTemplate
+  // (only host and user are required, cmdTemplate has a default)
+
+  // Save original env
+  const originalHost = process.env.MEMJET_SSH_HOST;
+  const originalUser = process.env.MEMJET_SSH_USER;
+  const originalCmdTemplate = process.env.MEMJET_SSH_REMOTE_CMD_TEMPLATE;
+  const originalBackend = process.env.MEMJET_REAL_BACKEND;
+
+  try {
+    // Set only host and user, leave cmdTemplate to default
+    process.env.MEMJET_SSH_HOST = '192.168.111.1';
+    process.env.MEMJET_SSH_USER = 'arrow';
+    delete process.env.MEMJET_SSH_REMOTE_CMD_TEMPLATE;
+    process.env.MEMJET_REAL_BACKEND = 'ssh';
+
+    // Reload config with new env
+    const config = loadBridgeConfig(process.env);
+    const settings = buildSshSettings({
+      host: config.memjet.host,
+      commandPort: config.memjet.commandPort,
+      eventPort: config.memjet.eventPort,
+      dataPort: config.memjet.dataPort
+    });
+
+    // Verify settings are complete (no missing required fields for host/user)
+    assert.ok(settings.sshHost === '192.168.111.1', 'sshHost should be set from env');
+    assert.ok(settings.sshUser === 'arrow', 'sshUser should be set from env');
+
+    // cmdTemplate should have default value, not be empty - this is the key fix!
+    assert.ok(settings.cmdTemplate.length > 0, 'cmdTemplate should have default value when not explicitly set');
+    assert.ok(settings.cmdTemplate.includes('pesctl'), 'default cmdTemplate should reference pesctl');
+
+    // The key assertion: settings.missing should NOT include cmdTemplate since it has a default
+    // Only host and user should be considered "missing" if not provided
+    assert.ok(!settings.missing.includes('MEMJET_SSH_REMOTE_CMD_TEMPLATE'),
+      'MEMJET_SSH_REMOTE_CMD_TEMPLATE should not be in missing when using default');
+
+  } finally {
+    // Restore original env
+    if (originalHost !== undefined) process.env.MEMJET_SSH_HOST = originalHost;
+    else delete process.env.MEMJET_SSH_HOST;
+    if (originalUser !== undefined) process.env.MEMJET_SSH_USER = originalUser;
+    else delete process.env.MEMJET_SSH_USER;
+    if (originalCmdTemplate !== undefined) process.env.MEMJET_SSH_REMOTE_CMD_TEMPLATE = originalCmdTemplate;
+    else delete process.env.MEMJET_SSH_REMOTE_CMD_TEMPLATE;
+    if (originalBackend !== undefined) process.env.MEMJET_REAL_BACKEND = originalBackend;
+    else delete process.env.MEMJET_REAL_BACKEND;
+  }
+
+  console.log('  ✓ testNoSkipWithConfiguredDefaults');
+}
+
+function testCmdTemplateDefaultValue() {
+  // Test that buildSshSettings provides a sensible default for cmdTemplate
+  const settings = buildSshSettings({
+    host: '192.168.111.1',
+    commandPort: 13001,
+    eventPort: 9231,
+    dataPort: 13001
+  });
+
+  // Default cmdTemplate should exist and contain expected placeholders
+  assert.ok(typeof settings.cmdTemplate === 'string', 'cmdTemplate must be a string');
+  assert.ok(settings.cmdTemplate.length > 0, 'cmdTemplate must not be empty');
+  assert.ok(settings.cmdTemplate.includes('{operation}'), 'cmdTemplate should include {operation} placeholder');
+  assert.ok(settings.cmdTemplate.includes('{args_json_b64}'), 'cmdTemplate should include {args_json_b64} placeholder');
+  assert.ok(settings.cmdTemplate.includes('{host}'), 'cmdTemplate should include {host} placeholder');
+
+  console.log('  ✓ testCmdTemplateDefaultValue');
+}
+
 async function run() {
   testBuildSshArgsStructure();
   testBuildSshArgsWithKeyFile();
   testBuildSshArgsWithoutKeyFile();
   testSshSettingsStructure();
   await testSelfCheckReturnsResultShape();
+  testBridgeCheckReusesStartupConfig();
+  testNoSkipWithConfiguredDefaults();
+  testCmdTemplateDefaultValue();
 
   console.log('ssh-self-check.test: PASS');
 }

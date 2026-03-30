@@ -3,6 +3,7 @@
  * Bridge Self-Check Script
  *
  * Runs SSH auth + getStatus parse check without starting the full bridge server.
+ * Uses the same config resolution path as bridge:start (loadBridgeConfig + buildSshSettings).
  * Exits 0 on success, 1 on failure (fast fail).
  *
  * Usage:
@@ -10,8 +11,8 @@
  *   node bridge/self-check.js
  */
 
-const { buildSshSettings, runSshSelfCheck } = require('./real-client-factory.local');
-const { loadPesDefaults } = require('./pes-defaults');
+const { loadBridgeConfig } = require('./config');
+const { buildSshSettings, runSshSelfCheck, isSshConfigured } = require('./real-client-factory.local');
 
 // Simple logger that writes to stderr
 const logger = {
@@ -24,32 +25,44 @@ const logger = {
 async function main() {
   const start = Date.now();
 
-  // Check if SSH is configured
-  const sshHost = String(process.env.MEMJET_SSH_HOST || process.env.RIP_SSH_HOST || '').trim();
-  const sshUser = String(process.env.MEMJET_SSH_USER || process.env.RIP_SSH_USER || '').trim();
-  const cmdTemplate = String(process.env.MEMJET_SSH_REMOTE_CMD_TEMPLATE || '').trim();
+  // Load config using same path as bridge server
+  const config = loadBridgeConfig(process.env);
 
-  if (!sshHost || !sshUser || !cmdTemplate) {
+  // Check backend mode - skip if local backend
+  const backend = String(process.env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
+  if (backend === 'local') {
+    console.error('[SKIP] Self-check skipped for local backend (MEMJET_REAL_BACKEND=local)');
+    process.exit(0);
+  }
+
+  // Build SSH settings using same resolution as bridge server
+  const settings = buildSshSettings({
+    host: config.memjet.host,
+    commandPort: config.memjet.commandPort,
+    eventPort: config.memjet.eventPort,
+    dataPort: config.memjet.dataPort
+  });
+
+  // Check if SSH is fully configured using the same logic as the bridge server
+  // buildSshSettings provides defaults for cmdTemplate, so we only need host and user
+  const sshHost = settings.sshHost;
+  const sshUser = settings.sshUser;
+
+  if (!sshHost || !sshUser) {
     const missing = [
-      !sshHost ? 'MEMJET_SSH_HOST' : null,
-      !sshUser ? 'MEMJET_SSH_USER' : null,
-      !cmdTemplate ? 'MEMJET_SSH_REMOTE_CMD_TEMPLATE' : null
+      !sshHost ? 'MEMJET_SSH_HOST (or ARROW_PES_HOST, MEMJET_TARGET_HOST, MEMJET_HOST)' : null,
+      !sshUser ? 'MEMJET_SSH_USER (or RIP_SSH_USER)' : null
     ].filter(Boolean);
     console.error(`[SKIP] SSH not fully configured (missing: ${missing.join(', ')})`);
     console.error('[HINT] Set the required environment variables to run the self-check');
     process.exit(0); // Exit 0 when skipped due to config
   }
 
+  // If buildSshSettings reports missing required fields, still attempt the check
+  // since cmdTemplate has a default value. Only skip if host or user is missing.
+
   console.error(`[CHECK] Starting bridge self-check...`);
   console.error(`[CHECK] SSH target: ${sshUser}@${sshHost}`);
-
-  const defaults = loadPesDefaults(process.env);
-  const settings = buildSshSettings({
-    host: defaults.host,
-    commandPort: defaults.commandPort,
-    eventPort: defaults.eventPort,
-    dataPort: defaults.dataPort
-  });
 
   const result = await runSshSelfCheck(settings, logger);
 
