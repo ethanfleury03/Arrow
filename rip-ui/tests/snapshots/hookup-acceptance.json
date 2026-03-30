@@ -1,5 +1,5 @@
 {
-  "source": "live",
+  "source": "bridge-http",
   "running": true,
   "engineState": "READY",
   "queueLength": 2,
@@ -10,6 +10,6 @@
   },
   "sequenceStep": "0/6",
   "pipeline": "WAITING",
-  "commandError": "Command rejected by backend.",
+  "commandError": "",
   "historyHead": []
 }

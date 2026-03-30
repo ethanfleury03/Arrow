@@ -235,6 +235,35 @@ function testGetAllJobs() {
   cleanup(store);
 }
 
+function testDeleteOldRecordsWhitelist() {
+  const store = setup();
+  store.migrate();
+
+  store.appendAudit('info', 'old.msg', {});
+
+  const deleted = store.deleteOldRecords('audit_log', -1);
+  assert.equal(typeof deleted, 'number');
+
+  let threw = false;
+  try {
+    store.deleteOldRecords('jobs; DROP TABLE jobs; --', 1);
+  } catch (error) {
+    threw = true;
+    assert.ok(error.message.includes('not in the allowed purgeable list'));
+  }
+  assert.ok(threw, 'deleteOldRecords must reject disallowed table names');
+
+  let threwJobs = false;
+  try {
+    store.deleteOldRecords('jobs', 1);
+  } catch {
+    threwJobs = true;
+  }
+  assert.ok(threwJobs, 'deleteOldRecords must reject the jobs table');
+
+  cleanup(store);
+}
+
 async function run() {
   testMigrations();
   console.log('✓ testMigrations');
@@ -259,6 +288,9 @@ async function run() {
 
   testGetAllJobs();
   console.log('✓ testGetAllJobs');
+
+  testDeleteOldRecordsWhitelist();
+  console.log('✓ testDeleteOldRecordsWhitelist');
 
   console.log('sqlite-store.test: PASS');
 }

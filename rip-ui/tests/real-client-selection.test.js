@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { selectBackendCandidates } = require('../bridge/real-client-factory.local');
+const { selectBackendCandidates, loadArrowPesDefaults } = require('../bridge/real-client-factory.local');
 
 function run() {
   const autoNoSsh = selectBackendCandidates({ MEMJET_REAL_BACKEND: 'auto' });
@@ -27,7 +27,37 @@ function run() {
   assert.equal(explicitSsh.requestedBackend, 'ssh');
   assert.deepEqual(explicitSsh.candidates, ['ssh']);
 
+  testPesDefaultsFromEnv();
+  testNoHardcodedCredentials();
+
   console.log('real-client-selection.test: PASS');
+}
+
+function testPesDefaultsFromEnv() {
+  const defaults = loadArrowPesDefaults();
+  assert.equal(typeof defaults.host, 'string');
+  assert.ok(defaults.host.length > 0, 'PES host must resolve to a non-empty string');
+  assert.equal(typeof defaults.commandPort, 'number');
+  assert.equal(typeof defaults.sshHostKeyFingerprint, 'string');
+  console.log('  ✓ testPesDefaultsFromEnv');
+}
+
+function testNoHardcodedCredentials() {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'bridge', 'real-client-factory.local.js'), 'utf8');
+  const passwordPatterns = [
+    /sshPassword\s*=\s*['"][^'"]+['"]/,
+    /sshUser\s*=\s*['"]root['"]/
+  ];
+  for (const pattern of passwordPatterns) {
+    assert.equal(
+      pattern.test(src),
+      false,
+      `Source must not contain hardcoded credential pattern: ${pattern}`
+    );
+  }
+  console.log('  ✓ testNoHardcodedCredentials');
 }
 
 run();

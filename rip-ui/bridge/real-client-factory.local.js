@@ -34,14 +34,18 @@ const { execFile } = require('node:child_process');
 
 const execFileAsync = promisify(execFile);
 
-// Arrow production defaults (intentionally hardcoded for consistency).
-const ARROW_PES = Object.freeze({
-  host: '192.168.111.1',
-  commandPort: 13001,
-  eventPort: 9231,
-  dataPort: 13001,
-  sshHostKeyEd25519: 'ssh-ed25519 255 SHA256:Dt4YfNq2cxtaqz3ssSPh6RXw4rPVPzZoJ7cLkH2Tias'
-});
+function loadArrowPesDefaults() {
+  const env = process.env;
+  return Object.freeze({
+    host: String(env.ARROW_PES_HOST || env.MEMJET_TARGET_HOST || '192.168.111.1').trim(),
+    commandPort: Number(env.ARROW_PES_COMMAND_PORT || env.MEMJET_TARGET_COMMAND_PORT || 13001),
+    eventPort: Number(env.ARROW_PES_EVENT_PORT || env.MEMJET_TARGET_EVENT_PORT || 9231),
+    dataPort: Number(env.ARROW_PES_DATA_PORT || env.MEMJET_TARGET_DATA_PORT || 13001),
+    sshHostKeyFingerprint: String(env.ARROW_PES_SSH_HOST_KEY || '').trim()
+  });
+}
+
+const ARROW_PES = loadArrowPesDefaults();
 
 function parseJsonSafe(value, fallback = null) {
   try {
@@ -359,10 +363,9 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const env = process.env;
   const backend = String(env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
 
-  // Hardcoded production target (requested): stable endpoint/user/pass.
-  const sshHost = ARROW_PES.host;
-  const sshUser = 'root';
-  const sshPassword = 'root';
+  const sshHost = String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || ARROW_PES.host).trim();
+  const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || '').trim();
+  const sshPassword = String(env.MEMJET_SSH_PASSWORD || env.RIP_SSH_PASSWORD || '').trim();
 
   const defaultUserKey = env.USERPROFILE ? `${env.USERPROFILE}\\.ssh\\id_ed25519` : '';
   const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || defaultUserKey).trim();
@@ -489,15 +492,19 @@ async function runSshOperation({ settings, operation, payload, logger }) {
         throw new Error('Windows password SSH requires plink. Add bin/plink.exe (vendored) or install PuTTY/plink in PATH.');
       }
 
-      run = await execFileAsync(plinkBin, [
-        '-batch',
-        '-hostkey', ARROW_PES.sshHostKeyEd25519,
+      const plinkArgs = ['-batch'];
+      if (ARROW_PES.sshHostKeyFingerprint) {
+        plinkArgs.push('-hostkey', ARROW_PES.sshHostKeyFingerprint);
+      }
+      plinkArgs.push(
         '-P', String(settings.sshPort),
         '-l', settings.sshUser,
         '-pw', settings.sshPassword,
         settings.sshHost,
         remoteCommand
-      ], {
+      );
+
+      run = await execFileAsync(plinkBin, plinkArgs, {
         timeout: settings.sshTimeoutMs,
         maxBuffer: 8 * 1024 * 1024
       });
@@ -1113,4 +1120,4 @@ async function createClient(params) {
   );
 }
 
-module.exports = { createClient, selectBackendCandidates, isSshConfigured };
+module.exports = { createClient, selectBackendCandidates, isSshConfigured, loadArrowPesDefaults };

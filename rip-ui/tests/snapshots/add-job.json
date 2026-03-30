@@ -6,5 +6,5 @@
     "JOB-0003"
   ],
   "queueTail": "submit(JOB-0003)",
-  "queueDepth": 3
+  "queueDepth": 2
 }

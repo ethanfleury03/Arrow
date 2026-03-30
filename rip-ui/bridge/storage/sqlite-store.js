@@ -407,7 +407,17 @@ class SqliteStore {
   }
 
   // Utilities
+  static PURGEABLE_TABLES = new Set([
+    'job_events',
+    'commands',
+    'device_status_snapshots',
+    'audit_log'
+  ]);
+
   deleteOldRecords(table, olderThanDays) {
+    if (!SqliteStore.PURGEABLE_TABLES.has(table)) {
+      throw new Error(`deleteOldRecords: table "${table}" is not in the allowed purgeable list`);
+    }
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - olderThanDays);
     const cutoffIso = cutoff.toISOString();

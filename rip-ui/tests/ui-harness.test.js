@@ -14,11 +14,36 @@ class Element {
     this._innerHTML = '';
     this.onclick = null;
     this.dataset = {};
+    this._attributes = {};
     this._buttons = [];
     this._classes = new Set();
     this.classList = {
-      add: cls => this._classes.add(cls)
+      add: cls => this._classes.add(cls),
+      remove: cls => this._classes.delete(cls),
+      toggle: cls => this._classes.has(cls) ? this._classes.delete(cls) : this._classes.add(cls),
+      contains: cls => this._classes.has(cls)
     };
+    this.style = {};
+    this.children = [];
+  }
+
+  setAttribute(name, value) {
+    this._attributes[name] = String(value);
+  }
+
+  getAttribute(name) {
+    return this._attributes[name] ?? null;
+  }
+
+  appendChild(child) {
+    this.children.push(child);
+    return child;
+  }
+
+  removeChild(child) {
+    const idx = this.children.indexOf(child);
+    if (idx !== -1) this.children.splice(idx, 1);
+    return child;
   }
 
   set innerHTML(value) {
@@ -93,12 +118,29 @@ function createHarness() {
       },
       setItem(k, v) {
         local.set(k, String(v));
+      },
+      removeItem(k) {
+        local.delete(k);
       }
     },
     setTimeout: fn => {
       timerQueue.push(fn);
       return timerQueue.length;
     },
+    clearTimeout: () => {},
+    setInterval: () => 999,
+    clearInterval: () => {},
+    requestAnimationFrame: () => 0,
+    cancelAnimationFrame: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    devicePixelRatio: 1,
+    console,
+    window: null,
+    navigator: { userAgent: 'test' },
+    fetch: () => Promise.reject(new Error('no network in test')),
+    confirm: () => true,
+    prompt: () => '1',
     Blob: class {
       constructor(parts) {
         this.parts = parts;
@@ -112,6 +154,7 @@ function createHarness() {
     }
   };
 
+  context.window = context;
   vm.createContext(context);
   const source = fs.readFileSync(APP_JS, 'utf8');
   vm.runInContext(source, context, { filename: APP_JS });
