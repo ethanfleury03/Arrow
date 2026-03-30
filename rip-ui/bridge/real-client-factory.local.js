@@ -328,10 +328,10 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || '').trim();
   const sshPassword = String(env.MEMJET_SSH_PASSWORD || env.RIP_SSH_PASSWORD || '').trim();
 
-  const defaultWindowsKey = 'C:\\Users\\Arrow\\.ssh\\id_ed25519';
-  const defaultUserKey = process.platform === 'win32'
-    ? (env.USERPROFILE ? `${env.USERPROFILE}\\.ssh\\id_ed25519` : defaultWindowsKey)
-    : (env.HOME ? `${env.HOME}/.ssh/id_ed25519` : '');
+  // Deterministic SSH key path: use path.join for cross-platform consistency
+  const defaultUserKey = process.platform === 'win32' && env.USERPROFILE
+    ? path.join(env.USERPROFILE, '.ssh', 'id_ed25519')
+    : path.join(env.HOME || '', '.ssh', 'id_ed25519');
   const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || defaultUserKey).trim();
   const sshPort = Number(env.MEMJET_SSH_PORT || env.RIP_SSH_PORT || 22);
   const sshBin = String(env.MEMJET_SSH_BIN || 'ssh').trim();
@@ -375,11 +375,15 @@ function interpolateTemplate(template, vars) {
 }
 
 function resolveBundledPlinkPath() {
-  const envPath = String(process.env.MEMJET_PLINK_PATH || '').trim();
+  // Check explicit env override first for non-interactive reliability
+  const envPath = String(process.env.MEMJET_PLINK_PATH || process.env.PLINK_PATH || '').trim();
   if (envPath && fs.existsSync(envPath)) return envPath;
 
+  // Deterministic search: workspace-relative paths first, then system locations
   const candidates = [
+    path.resolve(process.cwd(), 'runtime', 'bin', 'plink.exe'),
     path.resolve(process.cwd(), 'bin', 'plink.exe'),
+    path.resolve(__dirname, '..', 'runtime', 'bin', 'plink.exe'),
     path.resolve(__dirname, '..', 'bin', 'plink.exe'),
     path.resolve(process.resourcesPath || '', 'bin', 'plink.exe'),
     'C:\\Program Files\\PuTTY\\plink.exe',
@@ -424,13 +428,15 @@ async function runSshOperation({ settings, operation, payload, logger }) {
     throw new Error('SSH backend command template produced empty command. Check MEMJET_SSH_REMOTE_CMD_TEMPLATE.');
   }
 
+  // Deterministic SSH args: explicit options, key file only if exists (for non-interactive reliability)
   const sshArgs = [
     '-o', 'BatchMode=no',
     '-o', 'StrictHostKeyChecking=accept-new',
     '-o', 'IdentitiesOnly=yes',
     '-o', 'PreferredAuthentications=publickey,password,keyboard-interactive',
+    '-o', 'ConnectTimeout=15',
     '-p', String(settings.sshPort),
-    ...(settings.sshKeyPath ? ['-i', settings.sshKeyPath] : []),
+    ...(settings.sshKeyPath && fs.existsSync(settings.sshKeyPath) ? ['-i', settings.sshKeyPath] : []),
     `${settings.sshUser}@${settings.sshHost}`,
     remoteCommand
   ];
