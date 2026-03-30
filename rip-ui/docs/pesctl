@@ -112,33 +112,33 @@ cmd_port = int(os.environ.get('CMD_PORT', '13001'))
 
 level = None
 if op in ('clean_light', 'clean_medium', 'clean_heavy'):
- level = op.split('_', 1)[1].upper()
+    level = op.split('_', 1)[1].upper()
 
 payload = {}
 if args_b64:
- try:
-  decoded = base64.b64decode(args_b64)
-  payload = json.loads(decoded)
- except Exception:
-  payload = {}
+    try:
+        decoded = base64.b64decode(args_b64)
+        payload = json.loads(decoded)
+    except Exception:
+        payload = {}
 
 if level is None:
- for k in ('serviceType', 'service_type', 'procedureName', 'procedure_name', 'level', 'service'):
- v = payload.get(k)
- if isinstance(v, basestring) and v.strip():
- level = v.strip().upper()
- break
+    for k in ('serviceType', 'service_type', 'procedureName', 'procedure_name', 'level', 'service'):
+        v = payload.get(k)
+        if isinstance(v, basestring) and v.strip():
+            level = v.strip().upper()
+            break
 
 if not level:
- raise RuntimeError('startServicing requires level/serviceType (LIGHT|MEDIUM|HEAVY)')
+    raise RuntimeError('startServicing requires level/serviceType (LIGHT|MEDIUM|HEAVY)')
 
 service_map = {
- 'LIGHT': ServiceType.LIGHT,
- 'MEDIUM': ServiceType.MEDIUM,
- 'HEAVY': ServiceType.HEAVY,
+    'LIGHT': ServiceType.LIGHT,
+    'MEDIUM': ServiceType.MEDIUM,
+    'HEAVY': ServiceType.HEAVY,
 }
 if level not in service_map:
- raise RuntimeError('unsupported service level: {}'.format(level))
+    raise RuntimeError('unsupported service level: {}'.format(level))
 
 client = KPesClient(host=host)
 client.open_connection()
