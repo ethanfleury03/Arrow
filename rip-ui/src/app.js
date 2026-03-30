@@ -3787,11 +3787,100 @@ async function hydratePersistedJobs() {
     state.jobs = Array.from(mergedMap.values());
     state.status.queueDepth = state.jobs.length;
     
+    // Reconcile stale jobs after hydration
+    reconcileStaleJobs();
+    
     render();
     persistState();
     log(`Job hydration complete: ${hydratedJobs.length} jobs loaded from bridge DB.`);
   } catch (error) {
     log(`Job hydration failed (using localStorage fallback): ${error.message}`);
+    // Still reconcile stale jobs from localStorage
+    reconcileStaleJobs();
+  }
+}
+
+/**
+ * Reconcile stale jobs on startup.
+ * Detects jobs in active statuses that are stale/invalid and marks them as failed.
+ * Criteria:
+ *   - Missing usable file reference (inputPath/artifactPath/fileName)
+ *   - Old age threshold (>24h)
+ *   - No active bridge execution context
+ */
+function reconcileStaleJobs() {
+  const STALE_AGE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+  const now = Date.now();
+  let staleCount = 0;
+  
+  // Active statuses that could be stale
+  const ACTIVE_STATUSES_FOR_RECONCILIATION = new Set([
+    JOB_STATUS.QUEUED,
+    JOB_STATUS.SENDING,
+    JOB_STATUS.PREPARING,
+    JOB_STATUS.PRINTING,
+    JOB_STATUS.SENT
+  ]);
+  
+  state.jobs = state.jobs.map(job => {
+    const status = job.status || job.state || '';
+    
+    // Only check jobs in active statuses
+    if (!ACTIVE_STATUSES_FOR_RECONCILIATION.has(status)) {
+      return job;
+    }
+    
+    // Check if job has usable file reference
+    const hasFileReference = Boolean(
+      job.inputPath || 
+      job.artifactPath || 
+      job.fileName ||
+      job.name
+    );
+    
+    // Check job age
+    const updatedAtMs = job.updatedAt ? new Date(job.updatedAt).getTime() : 0;
+    const createdAtMs = job.createdAt ? new Date(job.createdAt).getTime() : 0;
+    const jobTimeMs = updatedAtMs || createdAtMs || now;
+    const ageMs = now - jobTimeMs;
+    const isOld = ageMs > STALE_AGE_THRESHOLD_MS;
+    
+    // Determine if job is stale
+    const isStale = !hasFileReference || isOld;
+    
+    if (isStale) {
+      staleCount++;
+      const reason = !hasFileReference 
+        ? 'stale_on_restart: missing file reference' 
+        : 'stale_on_restart: job older than 24h';
+      
+      log(`Reconciling stale job ${job.id}: ${reason}`);
+      
+      return {
+        ...job,
+        status: JOB_STATUS.FAILED,
+        state: JOB_STATUS.FAILED,
+        failReason: reason,
+        error: reason,
+        failedAt: new Date(now).toISOString(),
+        updatedAt: new Date(now).toISOString(),
+        history: [
+          ...(job.history || []),
+          {
+            at: new Date(now).toISOString(),
+            state: JOB_STATUS.FAILED,
+            from: status,
+            reason
+          }
+        ]
+      };
+    }
+    
+    return job;
+  });
+  
+  if (staleCount > 0) {
+    log(`Stale job reconciliation complete: ${staleCount} job(s) marked as failed.`);
   }
 }
 
