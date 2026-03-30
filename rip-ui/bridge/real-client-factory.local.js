@@ -328,9 +328,9 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || '').trim();
   const sshPassword = String(env.MEMJET_SSH_PASSWORD || env.RIP_SSH_PASSWORD || '').trim();
 
-  // Deterministic SSH key path: use path.join for cross-platform consistency
-  const defaultUserKey = process.platform === 'win32' && env.USERPROFILE
-    ? path.join(env.USERPROFILE, '.ssh', 'id_ed25519')
+  // Deterministic SSH key path: hardcoded for Arrow rig to avoid USERPROFILE variability
+  const defaultUserKey = process.platform === 'win32'
+    ? 'C:\\Users\\Arrow\\.ssh\\id_ed25519'
     : path.join(env.HOME || '', '.ssh', 'id_ed25519');
   const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || defaultUserKey).trim();
   const sshPort = Number(env.MEMJET_SSH_PORT || env.RIP_SSH_PORT || 22);
@@ -428,12 +428,12 @@ async function runSshOperation({ settings, operation, payload, logger }) {
     throw new Error('SSH backend command template produced empty command. Check MEMJET_SSH_REMOTE_CMD_TEMPLATE.');
   }
 
-  // Deterministic SSH args: explicit options, key file only if exists (for non-interactive reliability)
+  // Deterministic SSH args: BatchMode=yes for non-interactive (prevents hangs), key file only if exists
   const sshArgs = [
-    '-o', 'BatchMode=no',
+    '-o', 'BatchMode=yes',
     '-o', 'StrictHostKeyChecking=accept-new',
     '-o', 'IdentitiesOnly=yes',
-    '-o', 'PreferredAuthentications=publickey,password,keyboard-interactive',
+    '-o', 'PreferredAuthentications=publickey',
     '-o', 'ConnectTimeout=15',
     '-p', String(settings.sshPort),
     ...(settings.sshKeyPath && fs.existsSync(settings.sshKeyPath) ? ['-i', settings.sshKeyPath] : []),
@@ -509,13 +509,21 @@ async function runSshOperation({ settings, operation, payload, logger }) {
       rawStderr: stderr.slice(0, 4000)
     };
     if (logger?.info) {
-      logger.info({ msg: 'memjet.ssh.exec.result', operation, parsed: false, result: rawResult });
+      logger.info({ msg: 'memjet.ssh.exec.result', operation, parsed: false, lineCount: lines.length, result: rawResult });
     }
     return rawResult;
   }
 
   if (logger?.info) {
-    logger.info({ msg: 'memjet.ssh.exec.result', operation, parsed: true, result: parsed });
+    const hasOutput = parsed.output || parsed.rawStdout || parsed.resultRepr || parsed.raw;
+    logger.info({
+      msg: 'memjet.ssh.exec.result',
+      operation,
+      parsed: true,
+      hasOutput: Boolean(hasOutput),
+      ok: parsed.ok,
+      resultType: typeof parsed
+    });
   }
 
   if (parsed.ok === false) {
@@ -895,7 +903,32 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
 
   return {
     async getStatus() {
-      return call('getStatus', {});
+      const start = Date.now();
+      try {
+        const result = await call('getStatus', {});
+        const duration = Date.now() - start;
+        const hasOutput = result && (result.output || result.rawStdout || result.resultRepr);
+        if (logger?.info) {
+          logger.info({
+            msg: 'memjet.ssh.getStatus.ok',
+            durationMs: duration,
+            hasOutput: Boolean(hasOutput),
+            resultType: typeof result,
+            ok: result?.ok
+          });
+        }
+        return result;
+      } catch (error) {
+        const duration = Date.now() - start;
+        if (logger?.warn) {
+          logger.warn({
+            msg: 'memjet.ssh.getStatus.fail',
+            durationMs: duration,
+            error: error?.message || String(error)
+          });
+        }
+        throw error;
+      }
     },
 
     async getProductInfo() {
