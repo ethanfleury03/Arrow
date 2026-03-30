@@ -120,9 +120,16 @@ function resolveEngineState(status = {}) {
 
   let extraction = 'unknown';
   let rawLabel = '';
-  let numeric = Number.isInteger(status?.engineStateRawNumeric)
-    ? Number(status.engineStateRawNumeric)
-    : null;
+  let numeric = null;
+
+  // If engineStateRawNumeric is provided directly, use it and look up the mapped name
+  if (Number.isInteger(status?.engineStateRawNumeric)) {
+    numeric = Number(status.engineStateRawNumeric);
+    rawLabel = ENGINE_STATE_VALUE_TO_NAME[numeric] || '';
+    if (numeric != null) {
+      extraction = 'status.engineStateRawNumeric';
+    }
+  }
 
   for (const [source, value] of directNamedCandidates) {
     if (typeof value === 'string' && value.trim()) {

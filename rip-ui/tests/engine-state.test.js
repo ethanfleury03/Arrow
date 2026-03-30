@@ -48,10 +48,26 @@ function testHasSimulatedSignal() {
 }
 
 function testResolveEngineState() {
+  // Test state=6 with direct numeric - should preserve canonical Memjet label
   const ready = resolveEngineState({ engineStateRawNumeric: 6 });
   assert.equal(ready.engineState, 'READY');
   assert.equal(ready.canonical, 'PRIMED_IDLE');
   assert.equal(ready.numeric, 6);
+  assert.equal(ready.rawLabel, 'PRIMED_IDLE'); // Should NOT be 'STATE_6'
+
+  // Test state=7 (SERVICING)
+  const servicing = resolveEngineState({ engineStateRawNumeric: 7 });
+  assert.equal(servicing.engineState, 'IDLE');
+  assert.equal(servicing.canonical, 'SERVICING');
+  assert.equal(servicing.numeric, 7);
+  assert.equal(servicing.rawLabel, 'SERVICING');
+
+  // Test unknown state - should show STATE_99 fallback
+  const unknownState = resolveEngineState({ engineStateRawNumeric: 99 });
+  assert.equal(unknownState.engineState, 'UNKNOWN');
+  assert.equal(unknownState.canonical, null);
+  assert.equal(unknownState.numeric, 99);
+  assert.equal(unknownState.rawLabel, 'STATE_99'); // Unknown states use STATE_N format
 
   const printing = resolveEngineState({ engineStateRawLabel: 'PRINTING' });
   assert.equal(printing.engineState, 'PRINTING');
