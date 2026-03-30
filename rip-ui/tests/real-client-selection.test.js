@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { selectBackendCandidates, loadArrowPesDefaults } = require('../bridge/real-client-factory.local');
+const { selectBackendCandidates, loadArrowPesDefaults, buildSshArgs } = require('../bridge/real-client-factory.local');
 
 function run() {
   const autoNoSsh = selectBackendCandidates({ MEMJET_REAL_BACKEND: 'auto' });
@@ -32,6 +32,8 @@ function run() {
   testNoHardcodedCredentials();
   testSshKeyPathDefaults();
   testSshBatchModeEnforced();
+  testSshArgsConstruction();
+  testSshNoConfigFile();
 
   console.log('real-client-selection.test: PASS');
 }
@@ -107,6 +109,61 @@ function testSshBatchModeEnforced() {
   );
 
   console.log('  ✓ testSshBatchModeEnforced');
+}
+
+function testSshArgsConstruction() {
+  const settings = {
+    sshHost: '192.168.111.1',
+    sshUser: 'arrow',
+    sshPort: 22,
+    sshKeyPath: '/fake/key/path',
+    defaultParams: { host: '192.168.111.1', commandPort: '13001', eventPort: '9231', dataPort: '13001' }
+  };
+
+  const args = buildSshArgs(settings);
+
+  // Verify required SSH options are present
+  assert.ok(args.includes('-o'), 'SSH args must include -o for options');
+  assert.ok(args.includes('BatchMode=yes'), 'SSH args must include BatchMode=yes');
+  assert.ok(args.includes('IdentitiesOnly=yes'), 'SSH args must include IdentitiesOnly=yes');
+  assert.ok(args.includes('StrictHostKeyChecking=accept-new'), 'SSH args must include StrictHostKeyChecking=accept-new');
+  assert.ok(args.includes('PreferredAuthentications=publickey'), 'SSH args must include PreferredAuthentications=publickey');
+  assert.ok(args.includes('ConnectTimeout=15'), 'SSH args must include ConnectTimeout=15');
+
+  // Verify port option
+  const portIndex = args.indexOf('-p');
+  assert.ok(portIndex !== -1, 'SSH args must include -p flag');
+  assert.equal(args[portIndex + 1], '22', 'SSH port must be 22');
+
+  // Verify target host format
+  const userHost = `${settings.sshUser}@${settings.sshHost}`;
+  assert.ok(args.includes(userHost), `SSH args must include target ${userHost}`);
+
+  console.log('  ✓ testSshArgsConstruction');
+}
+
+function testSshNoConfigFile() {
+  const settings = {
+    sshHost: '192.168.111.1',
+    sshUser: 'arrow',
+    sshPort: 22,
+    sshKeyPath: '/fake/key/path',
+    defaultParams: { host: '192.168.111.1', commandPort: '13001', eventPort: '9231', dataPort: '13001' }
+  };
+
+  const args = buildSshArgs(settings);
+
+  // Verify -F NUL (Windows) or -F /dev/null (non-Windows) is present
+  const expectedNullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  const fIndex = args.indexOf('-F');
+  assert.ok(fIndex !== -1, 'SSH args must include -F flag');
+  assert.equal(args[fIndex + 1], expectedNullDevice, `SSH args must use -F ${expectedNullDevice} to ignore system SSH configs`);
+
+  // Verify -F is the first argument (must come before other options)
+  assert.equal(args[0], '-F', 'SSH -F flag must be the first argument');
+  assert.equal(args[1], expectedNullDevice, 'SSH -F value must be second argument');
+
+  console.log('  ✓ testSshNoConfigFile');
 }
 
 run();

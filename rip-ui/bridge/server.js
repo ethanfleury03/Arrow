@@ -12,6 +12,7 @@ const {
   hasSimulatedSignal,
   resolveEngineState
 } = require('./engine-state');
+const { buildSshSettings, runSshSelfCheck } = require('./real-client-factory.local');
 
 function json(res, statusCode, body) {
   res.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
@@ -125,6 +126,63 @@ function extractInkLevels(status = {}) {
     Y: Number.isFinite(byColor[3]) ? byColor[3] : 0,
     K: Number.isFinite(byColor[4]) ? byColor[4] : 0
   };
+}
+
+async function performStartupSelfCheck({ config, logger, skipIfLocal = false }) {
+  // Only run self-check for SSH backend
+  const backend = String(process.env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
+  if (skipIfLocal && backend === 'local') {
+    logger.info({ msg: 'bridge.selfCheck.skipped', reason: 'local_backend' });
+    return { ok: true, skipped: true };
+  }
+
+  // Check if SSH is configured
+  const sshHost = String(process.env.MEMJET_SSH_HOST || process.env.RIP_SSH_HOST || '').trim();
+  const sshUser = String(process.env.MEMJET_SSH_USER || process.env.RIP_SSH_USER || '').trim();
+  const cmdTemplate = String(process.env.MEMJET_SSH_REMOTE_CMD_TEMPLATE || '').trim();
+
+  if (!sshHost || !sshUser || !cmdTemplate) {
+    const missing = [
+      !sshHost ? 'MEMJET_SSH_HOST' : null,
+      !sshUser ? 'MEMJET_SSH_USER' : null,
+      !cmdTemplate ? 'MEMJET_SSH_REMOTE_CMD_TEMPLATE' : null
+    ].filter(Boolean);
+    const reason = `SSH not fully configured (missing: ${missing.join(', ')}) - skipping self-check`;
+    logger.info({ msg: 'bridge.selfCheck.skipped', reason, missing });
+    return { ok: true, skipped: true, reason };
+  }
+
+  logger.info({ msg: 'bridge.selfCheck.start', backend, sshHost, sshUser });
+
+  const settings = buildSshSettings({
+    host: config?.memjet?.host,
+    commandPort: config?.memjet?.commandPort,
+    eventPort: config?.memjet?.eventPort,
+    dataPort: config?.memjet?.dataPort
+  });
+
+  const result = await runSshSelfCheck(settings, logger);
+
+  if (!result.ok) {
+    logger.error({
+      msg: 'bridge.selfCheck.failed',
+      category: result.category,
+      reason: result.reason,
+      sshHost: settings.sshHost,
+      sshUser: settings.sshUser
+    });
+
+    // Return detailed error for caller to handle
+    return {
+      ok: false,
+      category: result.category,
+      reason: result.reason,
+      error: result.error
+    };
+  }
+
+  logger.info({ msg: 'bridge.selfCheck.ok' });
+  return { ok: true };
 }
 
 function createBridgeServer(options = {}) {
@@ -303,6 +361,25 @@ function createBridgeServer(options = {}) {
         }
       }
     } catch (error) {
+      const errorMsg = String(error?.message || error);
+      // Classify error into category for better observability
+      let errorCategory = 'unknown';
+      if (errorMsg.includes('Permission denied') || errorMsg.includes('Authentication failed')) {
+        errorCategory = 'ssh_auth_denied';
+      } else if (errorMsg.includes('Could not resolve hostname') || errorMsg.includes('Name or service not known')) {
+        errorCategory = 'ssh_host_unreachable';
+      } else if (errorMsg.includes('Connection refused')) {
+        errorCategory = 'ssh_connection_refused';
+      } else if (errorMsg.includes('Connection timed out') || errorMsg.includes('timeout')) {
+        errorCategory = 'ssh_timeout';
+      } else if (errorMsg.includes('config') || errorMsg.includes('SSH')) {
+        errorCategory = 'ssh_auth_config';
+      } else if (errorMsg.includes('pesctl') || errorMsg.includes('command not found')) {
+        errorCategory = 'pesctl_error';
+      } else if (errorMsg.includes('non-JSON') || errorMsg.includes('parse')) {
+        errorCategory = 'status_parse_error';
+      }
+
       const fallback = {
         engineState: 'UNKNOWN',
         engineStateRawNumeric: null,
@@ -314,17 +391,18 @@ function createBridgeServer(options = {}) {
         degraded: true,
         source: 'bridge-http',
         timestamp: new Date().toISOString(),
-        error: String(error?.message || error)
+        error: errorMsg,
+        errorCategory
       };
 
       latestRawDeviceStatus = latestRawDeviceStatus || { connected: false, degraded: true, details: {} };
       latestSystemState = fallback;
-      const signature = JSON.stringify({ engineState: fallback.engineState, connected: fallback.connected, degraded: fallback.degraded, error: fallback.error });
+      const signature = JSON.stringify({ engineState: fallback.engineState, connected: fallback.connected, degraded: fallback.degraded, error: fallback.error, errorCategory: fallback.errorCategory });
       if (signature !== lastStatusSignature) {
         lastStatusSignature = signature;
         emitSystemState(fallback);
       }
-      logger.error({ msg: 'bridge.status.poll.error', err: error?.message || String(error) });
+      logger.error({ msg: 'bridge.status.poll.error', err: errorMsg, errorCategory });
     } finally {
       statusPollInFlight = false;
     }
@@ -596,7 +674,19 @@ function createBridgeServer(options = {}) {
     manager,
     config,
     get shuttingDown() { return shuttingDown; },
-    start() {
+    async start() {
+      // Run startup self-check before starting status polling
+      const selfCheckResult = await performStartupSelfCheck({ config, logger, skipIfLocal: true });
+      if (!selfCheckResult.ok && !selfCheckResult.skipped) {
+        logger.error({
+          msg: 'bridge.startup.selfCheckFailed',
+          category: selfCheckResult.category,
+          reason: selfCheckResult.reason,
+          action: 'Set MEMJET_REAL_BACKEND=local to skip SSH self-check, or fix SSH configuration'
+        });
+        throw new Error(`Startup self-check failed: ${selfCheckResult.reason}`);
+      }
+
       return new Promise(resolve => {
         server.listen(config.port, config.host, () => {
           statusPollTimer = setInterval(() => {
