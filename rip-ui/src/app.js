@@ -1520,9 +1520,25 @@ function renderImportantControls() {
   text.textContent = on ? 'Auto-send On' : 'Auto-send Off';
 }
 
+function updateSendAndCopyButtons() {
+  const sendButton = document.getElementById('btnOpenSendJobModal');
+  const confirmSendButton = document.getElementById('btnConfirmSendJob');
+  const isPdfLoaded = state.artwork.loaded && /\.pdf$/i.test(state.artwork.name);
+
+  if (sendButton) {
+    sendButton.disabled = !isPdfLoaded;
+    sendButton.title = isPdfLoaded ? 'Send job to printer' : 'Load a PDF file to enable sending to printer.';
+  }
+  if (confirmSendButton) {
+    confirmSendButton.disabled = !isPdfLoaded;
+    confirmSendButton.title = isPdfLoaded ? 'Confirm and send job' : 'Load a PDF file to enable sending to printer.';
+  }
+}
+
 function render() {
   renderTick += 1;
   updateSequenceStatus();
+  updateSendAndCopyButtons();
 
   const selectedJobId = state.ui?.selectedJobId;
   const queueSummaryEl = document.getElementById('queueFlowSummary');
@@ -1865,6 +1881,21 @@ async function handleSendJobCopies(copyCount) {
     const msg = 'Missing local file path. Load artwork from disk in Electron and retry.';
     state.submission.lastResult = `ERROR: ${msg}`;
     log(`Send Job aborted: ${msg}`);
+    await appendAudit({ type: 'send-job', copies, outcome: 'invalid-payload', error: msg });
+    render();
+    persistState();
+    return;
+  }
+
+  // PDF-only guard: block send/copies for non-PDF files
+  const artworkName = state.artwork.name || '';
+  if (!/\.pdf$/i.test(artworkName)) {
+    const msg = `BLOCKED: Only PDF files can be sent to the printer. Current file "${artworkName}" is not a PDF.`;
+    state.submission.lastResult = `ERROR: ${msg}`;
+    log(`Send Job aborted: ${msg}`);
+    if (typeof alert === 'function') {
+      alert(`🚫 SEND BLOCKED\n\nOnly PDF files can be sent to the printer.\n\nFile: ${artworkName}\n\nPlease load a PDF file and try again.`);
+    }
     await appendAudit({ type: 'send-job', copies, outcome: 'invalid-payload', error: msg });
     render();
     persistState();
@@ -2373,26 +2404,37 @@ function handleImageFile(file) {
 
 function handleArtworkFile(file) {
   if (!file) return;
+  const isPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+
+  // PDF-only hard guard: block processing for non-PDF files
+  if (!isPdf) {
+    const msg = `BLOCKED: Only PDF files can be processed. Selected file "${file.name}" (type: ${file.type || 'unknown'}) is not a PDF.`;
+    log(msg);
+    if (typeof alert === 'function') {
+      alert(`🚫 FILE REJECTED\n\nOnly PDF files can be loaded for printing.\n\nFile: ${file.name}\nType: ${file.type || 'unknown'}\n\nPlease select a PDF file.`);
+    }
+    // Clear the file input
+    const fileInput = document.getElementById('pdfInput');
+    if (fileInput) fileInput.value = '';
+    // Clear any previously loaded artwork state
+    state.artwork.loaded = false;
+    state.artwork.name = '';
+    state.artwork.inputPath = '';
+    state.artwork.previewDataUrl = '';
+    render();
+    persistState();
+    return;
+  }
+
   state.artwork.inputPath = typeof file.path === 'string' ? file.path : '';
-  if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
-    const reader = new FileReader();
-    reader.onload = async event => {
-      const arrayBuffer = event.target.result;
-      await renderPdfFirstPage(arrayBuffer, file.name);
-    };
-    reader.onerror = () => log('File read failed for selected PDF.');
-    reader.readAsArrayBuffer(file);
-    return;
-  }
-
-  if (/^image\//i.test(file.type)) {
-    handleImageFile(file);
-    return;
-  }
-
-  log('Ignored unsupported file type. Use PDF or image.');
+  const reader = new FileReader();
+  reader.onload = async event => {
+    const arrayBuffer = event.target.result;
+    await renderPdfFirstPage(arrayBuffer, file.name);
+  };
+  reader.onerror = () => log('File read failed for selected PDF.');
+  reader.readAsArrayBuffer(file);
 }
-
 let modeling3dView = 'home';
 let modeling3dDraftLabel = null;
 let modeling3dViewerRuntime = null;
@@ -3665,6 +3707,7 @@ function clearLayoutPreview() {
   render();
   persistState();
   log('Cleared active sheet layout preview.');
+  updateSendAndCopyButtons();
 }
 
 function setConfigFromInputs() {
@@ -5224,6 +5267,13 @@ function bind() {
 
 bind();
 refreshQueueDepth();
+// Ensure send/copy buttons are disabled on initial load
+const initialSendButton = document.getElementById('btnOpenSendJobModal');
+const initialConfirmSendButton = document.getElementById('btnConfirmSendJob');
+if (initialSendButton) initialSendButton.disabled = true;
+if (initialConfirmSendButton) initialConfirmSendButton.disabled = true;
+
+updateSendAndCopyButtons(); // Explicitly call to ensure initial state of send buttons
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('resize', () => {
     renderLayoutRuler();
