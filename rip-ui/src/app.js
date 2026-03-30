@@ -3706,6 +3706,72 @@ async function hydrateRuntimeConfig() {
   }
 }
 
+// Hydrate persisted jobs from bridge DB (merged with localStorage state)
+async function hydratePersistedJobs() {
+  const bridgeBase = String(state.config?.bridgeBaseUrl || 'http://127.0.0.1:8787').replace(/\/$/, '');
+  try {
+    const response = await fetch(`${bridgeBase}/api/jobs`);
+    if (!response.ok) {
+      log(`Job hydration skipped: bridge returned ${response.status}`);
+      return;
+    }
+    const data = await response.json();
+    const bridgeJobs = data?.jobs || [];
+    if (!Array.isArray(bridgeJobs) || bridgeJobs.length === 0) {
+      log('Job hydration: no persisted jobs found in bridge DB.');
+      return;
+    }
+
+    // Map bridge job format to UI job format
+    const hydratedJobs = bridgeJobs.map(job => ({
+      id: job.jobId || job.id,
+      name: job.fileName || job.name || 'Unnamed Job',
+      status: mapBridgeStateToUi(job.state),
+      mode: job.mode || state.artwork?.placement?.fitMode || 'none',
+      copies: job.copies || 1,
+      size: job.size || getArtworkSizeLabel(),
+      source: 'bridge-db',
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      history: job.history || []
+    }));
+
+    // Merge with existing local jobs (bridge jobs take precedence for same ID)
+    const localJobs = state.jobs || [];
+    const mergedMap = new Map();
+    
+    // Add local jobs first
+    localJobs.forEach(job => mergedMap.set(job.id, job));
+    
+    // Override/add with bridge jobs (newer wins)
+    hydratedJobs.forEach(job => mergedMap.set(job.id, job));
+    
+    state.jobs = Array.from(mergedMap.values());
+    state.status.queueDepth = state.jobs.length;
+    
+    render();
+    persistState();
+    log(`Job hydration complete: ${hydratedJobs.length} jobs loaded from bridge DB.`);
+  } catch (error) {
+    log(`Job hydration failed (using localStorage fallback): ${error.message}`);
+  }
+}
+
+// Map bridge job state to UI job status
+function mapBridgeStateToUi(bridgeState) {
+  const stateMap = {
+    'draft': 'draft',
+    'validated': 'queued',
+    'queued': 'queued',
+    'preparing': 'queued',
+    'printing': 'printing',
+    'completed': 'done',
+    'error': 'error',
+    'cancelled': 'cancelled'
+  };
+  return stateMap[bridgeState] || bridgeState || 'queued';
+}
+
 function importConfigFile(file) {
   if (!file) return;
   const reader = new FileReader();
@@ -5040,6 +5106,7 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 render();
 startStatusPolling();
 hydrateRuntimeConfig();
+hydratePersistedJobs();
 if (state.logs.length === 0) {
   log('Prototype boot complete in live-operator mode (no auto command dispatch).');
   log('Status streaming starts automatically on load with fallback polling if needed.');

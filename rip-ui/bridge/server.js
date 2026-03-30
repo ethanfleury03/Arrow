@@ -616,6 +616,18 @@ function createBridgeServer(options = {}) {
         return json(res, 201, job);
       }
 
+      // List all persisted jobs (read-only endpoint for hydration)
+      if (req.method === 'GET' && url.pathname === '/api/jobs') {
+        const store = manager.getStore?.();
+        const jobs = store?.getAllJobs?.() || [];
+        return json(res, 200, {
+          jobs,
+          source: 'bridge-http',
+          timestamp: new Date().toISOString(),
+          count: jobs.length
+        });
+      }
+
       if (req.method === 'GET' && url.pathname.startsWith('/api/jobs/')) {
         const jobId = url.pathname.split('/')[3];
         const job = manager.getJob(jobId);
