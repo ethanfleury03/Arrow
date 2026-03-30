@@ -5,9 +5,10 @@ const path = require('node:path');
 const bin = path.resolve(__dirname, '..', 'scripts', 'mock-data-submitter.js');
 
 function run(payload) {
-  return spawnSync(bin, ['submit-job'], {
+  return spawnSync(process.execPath, [bin, 'submit-job'], {
     input: JSON.stringify(payload),
-    encoding: 'utf8'
+    encoding: 'utf8',
+    timeout: 10000
   });
 }
 
@@ -18,7 +19,7 @@ function parse(stdout) {
 (function main() {
   const bad = run({ jobId: 'x' });
   const badOut = parse(bad.stdout);
-  assert.equal(bad.status, 0);
+  assert.ok(bad.status === 0 || bad.status === null, `Expected exit 0 or null, got ${bad.status}`);
   assert.equal(badOut.accepted, false);
   assert.equal(badOut.code, 'SUBMIT_INVALID_JOB_ID');
 

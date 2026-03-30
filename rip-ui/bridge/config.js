@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { loadPesDefaults } = require('./pes-defaults');
 
 function num(value, fallback) {
   const parsed = Number(value);
@@ -11,22 +12,6 @@ function bool(value, fallback = false) {
   return ['1', 'true', 'yes', 'on'].includes(normalized);
 }
 
-function pickString(...values) {
-  for (const value of values) {
-    const str = String(value || '').trim();
-    if (str) return str;
-  }
-  return '';
-}
-
-function pickNumber(values, fallback) {
-  for (const value of values) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return fallback;
-}
-
 function resolveArrowRoot(env = process.env) {
   const configured = String(env.ARROW_ROOT || '').trim();
   if (configured) return path.resolve(configured);
@@ -37,11 +22,11 @@ function loadBridgeConfig(env = process.env) {
   const port = num(env.RIP_BRIDGE_PORT, 8787);
   const arrowRoot = resolveArrowRoot(env);
 
-  // MEMJET_TARGET_* is the forced/locked target override and always wins when set.
-  const targetHost = pickString(env.MEMJET_TARGET_HOST, env.MEMJET_HOST, '192.168.100.200');
-  const targetCommandPort = pickNumber([env.MEMJET_TARGET_COMMAND_PORT, env.MEMJET_COMMAND_PORT], 13001);
-  const targetEventPort = pickNumber([env.MEMJET_TARGET_EVENT_PORT, env.MEMJET_EVENT_PORT], 9231);
-  const targetDataPort = pickNumber([env.MEMJET_TARGET_DATA_PORT, env.MEMJET_DATA_PORT], 13001);
+  const pes = loadPesDefaults(env);
+  const targetHost = pes.host;
+  const targetCommandPort = pes.commandPort;
+  const targetEventPort = pes.eventPort;
+  const targetDataPort = pes.dataPort;
 
   return {
     port,

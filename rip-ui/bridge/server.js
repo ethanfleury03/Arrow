@@ -4,16 +4,36 @@ const { loadBridgeConfig } = require('./config');
 const { createLogger } = require('./logger');
 const { createMemjetAdapter, AdapterCapabilityError } = require('./memjet-adapter');
 const { JobManager } = require('./job-manager');
+const {
+  ENGINE_STATE_VALUE_TO_NAME,
+  ENGINE_STATE_NAME_TO_UI,
+  parseEngineStateNumberFromRaw,
+  extractEmbeddedJsonRawFromOutput,
+  hasSimulatedSignal,
+  resolveEngineState
+} = require('./engine-state');
+const { buildSshSettings, runSshSelfCheck } = require('./real-client-factory.local');
 
 function json(res, statusCode, body) {
   res.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
 }
 
+const MAX_BODY_BYTES = Number(process.env.RIP_BRIDGE_MAX_BODY_BYTES) || 10 * 1024 * 1024;
+
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let buf = '';
-    req.on('data', chunk => { buf += String(chunk); });
+    let bytes = 0;
+    req.on('data', chunk => {
+      bytes += chunk.length;
+      if (bytes > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(new Error(`Request body exceeds ${MAX_BODY_BYTES} byte limit`));
+        return;
+      }
+      buf += String(chunk);
+    });
     req.on('end', () => {
       if (!buf.trim()) return resolve({});
       try { resolve(JSON.parse(buf)); } catch (e) { reject(e); }
@@ -72,39 +92,6 @@ function classifyCommandRuntimeError(error, command) {
   return null;
 }
 
-function hasSimulatedSignal(value, depth = 0) {
-  if (depth > 4 || value == null) return false;
-
-  if (typeof value === 'boolean') return value === true;
-
-  if (typeof value === 'string') {
-    const src = value.trim().toLowerCase();
-    return src.includes('simulat') || src.includes('shim') || src.includes('no-op') || src.includes('noop') || src.includes('dry-run') || src.includes('dry run');
-  }
-
-  if (Array.isArray(value)) {
-    return value.some(item => hasSimulatedSignal(item, depth + 1));
-  }
-
-  if (typeof value === 'object') {
-    if (value.simulated === true || value.shim === true || value.noop === true || value.noOp === true || value.dryRun === true) {
-      return true;
-    }
-
-    return Object.entries(value).some(([key, val]) => {
-      const keyLc = String(key || '').toLowerCase();
-      if (['simulated', 'shim', 'noop', 'noop', 'dryrun', 'dry_run'].includes(keyLc)) {
-        return hasSimulatedSignal(val, depth + 1);
-      }
-      if (['message', 'reason', 'note', 'status', 'resultrepr', 'output'].includes(keyLc)) {
-        return hasSimulatedSignal(val, depth + 1);
-      }
-      return false;
-    });
-  }
-
-  return false;
-}
 
 function firstDefinedString(...values) {
   for (const value of values) {
@@ -115,73 +102,6 @@ function firstDefinedString(...values) {
 }
 
 
-const ENGINE_STATE_VALUE_TO_NAME = Object.freeze({
-  1: 'OFF',
-  2: 'FAULT',
-  3: 'TESTING',
-  4: 'INITIALISING',
-  5: 'DEPRIMED_IDLE',
-  6: 'PRIMED_IDLE',
-  7: 'SERVICING',
-  8: 'PRE_JOB',
-  9: 'PRINT_READY',
-  10: 'PRINTING',
-  11: 'MID_JOB',
-  12: 'PAUSED',
-  13: 'SESSION_COMPLETE',
-  14: 'POST_JOB',
-  15: 'SHUTTING_DOWN',
-  16: 'PAUSING'
-});
-
-const ENGINE_STATE_NAME_TO_UI = Object.freeze({
-  OFF: 'OFF',
-  FAULT: 'FAULT',
-  TESTING: 'IDLE',
-  INITIALISING: 'IDLE',
-  DEPRIMED_IDLE: 'READY',
-  PRIMED_IDLE: 'READY',
-  SERVICING: 'IDLE',
-  PRE_JOB: 'READY',
-  PRINT_READY: 'READY',
-  PRINTING: 'PRINTING',
-  MID_JOB: 'PRINTING',
-  PAUSED: 'READY',
-  SESSION_COMPLETE: 'READY',
-  POST_JOB: 'IDLE',
-  SHUTTING_DOWN: 'IDLE',
-  PAUSING: 'PRINTING'
-});
-
-function parseEngineStateNumberFromRaw(text) {
-  const src = String(text || '');
-  if (!src) return null;
-  const match = src.match(/engineStatus\s*[=.:]\s*[^\n\r]*?state\s*[=:]\s*(\d{1,3})/i)
-    || src.match(/engineStatus\.state\s*[=:]\s*(\d{1,3})/i)
-    || src.match(/\bstate\s*[=:]\s*(\d{1,3})\b/i);
-  if (!match) return null;
-  const value = Number(match[1]);
-  return Number.isInteger(value) ? value : null;
-}
-
-function extractEmbeddedJsonRawFromOutput(text) {
-  const src = String(text || '');
-  if (!src) return null;
-
-  const lines = src.split(/\r?\n/);
-  for (const line of lines) {
-    const candidate = line.trim();
-    if (!candidate.startsWith('{') || !candidate.endsWith('}')) continue;
-    try {
-      const parsed = JSON.parse(candidate);
-      if (parsed && typeof parsed.raw === 'string' && parsed.raw.trim()) {
-        return parsed.raw;
-      }
-    } catch {}
-  }
-
-  return null;
-}
 
 function extractInkLevels(status = {}) {
   const details = status?.details || {};
@@ -208,102 +128,61 @@ function extractInkLevels(status = {}) {
   };
 }
 
-function resolveEngineState(status = {}) {
-  const details = status?.details || {};
-  const productInfo = details?.productInfo || {};
-
-  const directNamedCandidates = [
-    ['status.engineStateRawLabel', status?.engineStateRawLabel],
-    ['details.engineStateRawLabel', details?.engineStateRawLabel],
-    ['status.engineState', status?.engineState],
-    ['details.engineState', details?.engineState],
-    ['details.engine', details?.engine],
-    ['productInfo.engineState', productInfo?.engineState],
-    ['productInfo.engine', productInfo?.engine],
-    ['productInfo.status.engineState', productInfo?.status?.engineState],
-    ['productInfo.status.engine', productInfo?.status?.engine],
-    ['productInfo.status.state', productInfo?.status?.state],
-    ['productInfo.state', productInfo?.state]
-  ];
-
-  let extraction = 'unknown';
-  let rawLabel = '';
-  let numeric = Number.isInteger(status?.engineStateRawNumeric)
-    ? Number(status.engineStateRawNumeric)
-    : null;
-
-  for (const [source, value] of directNamedCandidates) {
-    if (typeof value === 'string' && value.trim()) {
-      const candidate = value.trim().toUpperCase();
-      if (candidate !== 'UNKNOWN') {
-        rawLabel = candidate;
-        extraction = source;
-        break;
-      }
-    }
-    if (typeof value === 'number' && Number.isInteger(value)) {
-      numeric = value;
-      rawLabel = ENGINE_STATE_VALUE_TO_NAME[value] || '';
-      extraction = `${source}:numeric`;
-      if (rawLabel) break;
-    }
+async function performStartupSelfCheck({ config, logger, skipIfLocal = false }) {
+  // Only run self-check for SSH backend
+  const backend = String(process.env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
+  if (skipIfLocal && backend === 'local') {
+    logger.info({ msg: 'bridge.selfCheck.skipped', reason: 'local_backend' });
+    return { ok: true, skipped: true };
   }
 
-  if (!rawLabel) {
-    const embeddedRaw = extractEmbeddedJsonRawFromOutput(productInfo?.output);
-    if (embeddedRaw) {
-      const parsed = parseEngineStateNumberFromRaw(embeddedRaw);
-      if (parsed != null) {
-        numeric = parsed;
-        rawLabel = ENGINE_STATE_VALUE_TO_NAME[parsed] || '';
-        extraction = 'productInfo.output.embeddedJson.raw:regex';
-      }
-    }
+  // Check if SSH is configured
+  const sshHost = String(process.env.MEMJET_SSH_HOST || process.env.RIP_SSH_HOST || '').trim();
+  const sshUser = String(process.env.MEMJET_SSH_USER || process.env.RIP_SSH_USER || '').trim();
+  const cmdTemplate = String(process.env.MEMJET_SSH_REMOTE_CMD_TEMPLATE || '').trim();
 
-    if (!rawLabel) {
-      const rawTextCandidates = [
-        ['productInfo.output', productInfo?.output],
-        ['productInfo.resultRepr', productInfo?.resultRepr],
-        ['productInfo.rawStdout', productInfo?.rawStdout],
-        ['productInfo.raw', productInfo?.raw],
-        ['details.raw', details?.raw],
-        ['status.raw', status?.raw],
-        ['status.output', status?.output],
-        ['details.output', details?.output]
-      ];
-      for (const [source, raw] of rawTextCandidates) {
-        const parsed = parseEngineStateNumberFromRaw(raw);
-        if (parsed != null) {
-          numeric = parsed;
-          rawLabel = ENGINE_STATE_VALUE_TO_NAME[parsed] || '';
-          extraction = `${source}:regex`;
-          break;
-        }
-      }
-    }
+  if (!sshHost || !sshUser || !cmdTemplate) {
+    const missing = [
+      !sshHost ? 'MEMJET_SSH_HOST' : null,
+      !sshUser ? 'MEMJET_SSH_USER' : null,
+      !cmdTemplate ? 'MEMJET_SSH_REMOTE_CMD_TEMPLATE' : null
+    ].filter(Boolean);
+    const reason = `SSH not fully configured (missing: ${missing.join(', ')}) - skipping self-check`;
+    logger.info({ msg: 'bridge.selfCheck.skipped', reason, missing });
+    return { ok: true, skipped: true, reason };
   }
 
-  if (!rawLabel && numeric == null) {
-    const serialized = JSON.stringify(status || {});
-    const parsed = parseEngineStateNumberFromRaw(serialized);
-    if (parsed != null) {
-      numeric = parsed;
-      rawLabel = ENGINE_STATE_VALUE_TO_NAME[parsed] || '';
-      extraction = 'status.serialized:regex';
-    }
+  logger.info({ msg: 'bridge.selfCheck.start', backend, sshHost, sshUser });
+
+  const settings = buildSshSettings({
+    host: config?.memjet?.host,
+    commandPort: config?.memjet?.commandPort,
+    eventPort: config?.memjet?.eventPort,
+    dataPort: config?.memjet?.dataPort
+  });
+
+  const result = await runSshSelfCheck(settings, logger);
+
+  if (!result.ok) {
+    logger.error({
+      msg: 'bridge.selfCheck.failed',
+      category: result.category,
+      reason: result.reason,
+      sshHost: settings.sshHost,
+      sshUser: settings.sshUser
+    });
+
+    // Return detailed error for caller to handle
+    return {
+      ok: false,
+      category: result.category,
+      reason: result.reason,
+      error: result.error
+    };
   }
 
-  const canonical = rawLabel || (numeric != null ? ENGINE_STATE_VALUE_TO_NAME[numeric] || '' : '');
-  const canonicalUi = ENGINE_STATE_NAME_TO_UI[canonical] || (canonical || 'UNKNOWN');
-  const displayRawLabel = rawLabel || (numeric != null ? `STATE_${numeric}` : 'UNKNOWN');
-
-  return {
-    numeric,
-    rawLabel: displayRawLabel,
-    canonical: canonical || null,
-    engineState: canonicalUi || 'UNKNOWN',
-    extraction
-  };
+  logger.info({ msg: 'bridge.selfCheck.ok' });
+  return { ok: true };
 }
 
 function createBridgeServer(options = {}) {
@@ -369,6 +248,7 @@ function createBridgeServer(options = {}) {
 
   let statusPollTimer = null;
   let statusPollInFlight = false;
+  let statusPollPromise = null;
   let lastStatusSignature = '';
   let latestRawDeviceStatus = null;
   let latestSystemState = {
@@ -423,8 +303,13 @@ function createBridgeServer(options = {}) {
   }
 
   async function pollSystemState() {
-    if (statusPollInFlight) return;
+    if (statusPollInFlight) return statusPollPromise;
     statusPollInFlight = true;
+    statusPollPromise = _doPoll();
+    return statusPollPromise;
+  }
+
+  async function _doPoll() {
 
     try {
       const status = await manager.refreshDeviceStatus();
@@ -476,6 +361,25 @@ function createBridgeServer(options = {}) {
         }
       }
     } catch (error) {
+      const errorMsg = String(error?.message || error);
+      // Classify error into category for better observability
+      let errorCategory = 'unknown';
+      if (errorMsg.includes('Permission denied') || errorMsg.includes('Authentication failed')) {
+        errorCategory = 'ssh_auth_denied';
+      } else if (errorMsg.includes('Could not resolve hostname') || errorMsg.includes('Name or service not known')) {
+        errorCategory = 'ssh_host_unreachable';
+      } else if (errorMsg.includes('Connection refused')) {
+        errorCategory = 'ssh_connection_refused';
+      } else if (errorMsg.includes('Connection timed out') || errorMsg.includes('timeout')) {
+        errorCategory = 'ssh_timeout';
+      } else if (errorMsg.includes('config') || errorMsg.includes('SSH')) {
+        errorCategory = 'ssh_auth_config';
+      } else if (errorMsg.includes('pesctl') || errorMsg.includes('command not found')) {
+        errorCategory = 'pesctl_error';
+      } else if (errorMsg.includes('non-JSON') || errorMsg.includes('parse')) {
+        errorCategory = 'status_parse_error';
+      }
+
       const fallback = {
         engineState: 'UNKNOWN',
         engineStateRawNumeric: null,
@@ -487,16 +391,18 @@ function createBridgeServer(options = {}) {
         degraded: true,
         source: 'bridge-http',
         timestamp: new Date().toISOString(),
-        error: String(error?.message || error)
+        error: errorMsg,
+        errorCategory
       };
 
+      latestRawDeviceStatus = latestRawDeviceStatus || { connected: false, degraded: true, details: {} };
       latestSystemState = fallback;
-      const signature = JSON.stringify({ engineState: fallback.engineState, connected: fallback.connected, degraded: fallback.degraded, error: fallback.error });
+      const signature = JSON.stringify({ engineState: fallback.engineState, connected: fallback.connected, degraded: fallback.degraded, error: fallback.error, errorCategory: fallback.errorCategory });
       if (signature !== lastStatusSignature) {
         lastStatusSignature = signature;
         emitSystemState(fallback);
       }
-      logger.error({ msg: 'bridge.status.poll.error', err: error?.message || String(error) });
+      logger.error({ msg: 'bridge.status.poll.error', err: errorMsg, errorCategory });
     } finally {
       statusPollInFlight = false;
     }
@@ -748,11 +654,39 @@ function createBridgeServer(options = {}) {
     }
   });
 
+  let inFlightRequests = 0;
+  let shuttingDown = false;
+
+  const origEmit = server.emit.bind(server);
+  server.emit = function (event, ...args) {
+    if (event === 'request') {
+      inFlightRequests++;
+      const res = args[1];
+      const onFinish = () => { inFlightRequests--; };
+      res.on('finish', onFinish);
+      res.on('close', onFinish);
+    }
+    return origEmit(event, ...args);
+  };
+
   return {
     server,
     manager,
     config,
-    start() {
+    get shuttingDown() { return shuttingDown; },
+    async start() {
+      // Run startup self-check before starting status polling
+      const selfCheckResult = await performStartupSelfCheck({ config, logger, skipIfLocal: true });
+      if (!selfCheckResult.ok && !selfCheckResult.skipped) {
+        logger.error({
+          msg: 'bridge.startup.selfCheckFailed',
+          category: selfCheckResult.category,
+          reason: selfCheckResult.reason,
+          action: 'Set MEMJET_REAL_BACKEND=local to skip SSH self-check, or fix SSH configuration'
+        });
+        throw new Error(`Startup self-check failed: ${selfCheckResult.reason}`);
+      }
+
       return new Promise(resolve => {
         server.listen(config.port, config.host, () => {
           statusPollTimer = setInterval(() => {
@@ -764,19 +698,52 @@ function createBridgeServer(options = {}) {
         });
       });
     },
-    stop() {
-      return new Promise(resolve => {
-        if (statusPollTimer) clearInterval(statusPollTimer);
-        statusPollTimer = null;
-        server.close(() => resolve());
-      });
+    async stop() {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      logger.info({ msg: 'bridge.shutdown.start', inFlight: inFlightRequests });
+
+      if (statusPollTimer) clearInterval(statusPollTimer);
+      statusPollTimer = null;
+
+      for (const sub of subscribers) {
+        try { sub.end(); } catch {}
+      }
+      subscribers.clear();
+      for (const sub of statusSubscribers) {
+        try { sub.end(); } catch {}
+      }
+      statusSubscribers.clear();
+
+      const drainTimeoutMs = Number(process.env.RIP_BRIDGE_DRAIN_TIMEOUT_MS) || 5000;
+      const deadline = Date.now() + drainTimeoutMs;
+      while (inFlightRequests > 0 && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      if (inFlightRequests > 0) {
+        logger.warn({ msg: 'bridge.shutdown.drain_timeout', remaining: inFlightRequests });
+      }
+
+      await new Promise(resolve => server.close(() => resolve()));
+
+      try { store?.close(); } catch {}
+      logger.info({ msg: 'bridge.shutdown.complete' });
     }
   };
 }
 
 if (require.main === module) {
   const bridge = createBridgeServer();
-  bridge.start();
+  bridge.start().then(() => {
+    const shutdown = async (signal) => {
+      bridge.config._logger?.info?.({ msg: 'bridge.signal', signal }) ||
+        console.log(`[bridge] received ${signal}, shutting down`);
+      await bridge.stop();
+      process.exit(0);
+    };
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+  });
 }
 
 module.exports = { createBridgeServer };

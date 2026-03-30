@@ -47,6 +47,44 @@ async function run() {
   const cancelled = await fetch(`${base}/api/jobs/JOB_CANCEL_TEST/cancel`, { method: 'POST' }).then(r => r.json());
   assert.equal(cancelled.state, 'cancelled');
 
+  // Path traversal: ingest with malicious fileName must sanitize
+  const traversalRes = await fetch(`${base}/api/jobs/ingest`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fileName: '../../etc/passwd',
+      contentBase64: Buffer.from('test').toString('base64')
+    })
+  });
+  const traversalJob = await traversalRes.json();
+  if (traversalRes.status === 201) {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    assert.ok(
+      traversalJob.artifactPath == null || !traversalJob.artifactPath.includes('etc/passwd'),
+      'Traversal fileName must be sanitized out of artifact path'
+    );
+    assert.ok(
+      traversalJob.fileName !== '../../etc/passwd',
+      'Stored fileName must not contain path separators'
+    );
+  }
+  console.log('  ✓ path-traversal-ingest');
+
+  // Sanitization: special characters in fileName
+  const specialRes = await fetch(`${base}/api/jobs/ingest`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fileName: 'my file (1)  <test>.pdf',
+      contentBase64: Buffer.from('test').toString('base64')
+    })
+  });
+  assert.equal(specialRes.status, 201);
+  const specialJob = await specialRes.json();
+  assert.ok(!/[<>() ]/.test(specialJob.fileName), 'Special chars must be sanitized from fileName');
+  console.log('  ✓ filename-sanitization');
+
   await bridge.stop();
   console.log('bridge-v1.test: PASS');
 }

@@ -87,17 +87,38 @@ class JobManager {
     return job;
   }
 
+  _sanitizeFileName(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+    const basename = path.basename(raw);
+    const sanitized = basename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 255);
+    if (!sanitized || sanitized === '.' || sanitized === '..') return null;
+    return sanitized;
+  }
+
+  _safeArtifactPath(fileName) {
+    const resolved = path.resolve(this.artifactsDir, fileName);
+    const normalizedDir = path.resolve(this.artifactsDir) + path.sep;
+    if (!resolved.startsWith(normalizedDir) && resolved !== path.resolve(this.artifactsDir, fileName)) {
+      throw new Error(`Artifact path escapes artifacts directory: ${fileName}`);
+    }
+    if (!resolved.startsWith(path.resolve(this.artifactsDir))) {
+      throw new Error(`Artifact path escapes artifacts directory: ${fileName}`);
+    }
+    return resolved;
+  }
+
   ingestJob(payload = {}) {
     if (!payload.filePath && !payload.contentBase64) {
       throw new Error('Provide either filePath or contentBase64 for ingest');
     }
 
     let artifactPath = payload.filePath;
-    let fileName = payload.fileName || (artifactPath ? path.basename(artifactPath) : null);
+    let fileName = this._sanitizeFileName(payload.fileName)
+      || (artifactPath ? this._sanitizeFileName(path.basename(artifactPath)) : null);
 
     if (payload.contentBase64) {
       const safeName = fileName || `artifact-${Date.now()}.bin`;
-      artifactPath = path.join(this.artifactsDir, safeName);
+      artifactPath = this._safeArtifactPath(safeName);
       fs.writeFileSync(artifactPath, Buffer.from(payload.contentBase64, 'base64'));
       fileName = safeName;
     }

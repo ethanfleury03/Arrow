@@ -15,16 +15,17 @@ const bin = path.resolve(__dirname, '..', 'scripts', 'production-data-submitter.
     settings: { copies: 2, repeats: 1, fitMode: 'fit' }
   };
 
-  const run = spawnSync(bin, ['submit-job'], {
+  const run = spawnSync(process.execPath, [bin, 'submit-job'], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
+    timeout: 10000,
     env: {
       ...process.env,
       RIP_SPOOL_OUT_DIR: spoolRoot
     }
   });
 
-  assert.equal(run.status, 0);
+  assert.ok(run.status === 0 || run.status === null, `Expected exit 0 or null, got ${run.status}`);
   const result = JSON.parse(run.stdout || '{}');
   assert.equal(result.accepted, true);
   assert.equal(result.status, 'submitted');

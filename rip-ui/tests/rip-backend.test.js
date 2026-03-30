@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const fs = require('node:fs');
 const { createRipBackend } = require('../electron/rip-backend');
 
 async function withServer(handler, run) {
@@ -14,6 +15,10 @@ async function withServer(handler, run) {
 }
 
 async function run() {
+  if (!fs.existsSync('/tmp/mock-job.pdf')) {
+    fs.writeFileSync('/tmp/mock-job.pdf', '%PDF-1.4 mock');
+  }
+
   let statusCallCount = 0;
   await withServer((req, res) => {
     if (req.method === 'GET' && req.url === '/api/device/status') {
@@ -195,9 +200,10 @@ async function run() {
     const result = await backend.submitJob({
       jobId: 'LOCAL_JOB_123',
       inputPath: '/tmp/mock-job.pdf',
-      args: ['--copies', '3'],
+      copies: 3,
       config: { host: '127.0.0.1', commandPort: 13002 },
-      settings: { inputPath: '/tmp/mock-job.pdf' }
+      settings: { inputPath: '/tmp/mock-job.pdf' },
+      fileName: 'mock-job.pdf'
     });
 
     assert.equal(result.accepted, true);

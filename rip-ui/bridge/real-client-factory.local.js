@@ -31,17 +31,16 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 const { execFile } = require('node:child_process');
+const { hasSimulatedSignal } = require('./engine-state');
+const { loadPesDefaults } = require('./pes-defaults');
 
 const execFileAsync = promisify(execFile);
 
-// Arrow production defaults (intentionally hardcoded for consistency).
-const ARROW_PES = Object.freeze({
-  host: '192.168.111.1',
-  commandPort: 13001,
-  eventPort: 9231,
-  dataPort: 13001,
-  sshHostKeyEd25519: 'ssh-ed25519 255 SHA256:Dt4YfNq2cxtaqz3ssSPh6RXw4rPVPzZoJ7cLkH2Tias'
-});
+function loadArrowPesDefaults(env) {
+  return loadPesDefaults(env);
+}
+
+const ARROW_PES = loadArrowPesDefaults();
 
 function parseJsonSafe(value, fallback = null) {
   try {
@@ -49,40 +48,6 @@ function parseJsonSafe(value, fallback = null) {
   } catch {
     return fallback;
   }
-}
-
-function hasSimulatedSignal(value, depth = 0) {
-  if (depth > 4 || value == null) return false;
-
-  if (typeof value === 'boolean') return value === true;
-
-  if (typeof value === 'string') {
-    const src = value.trim().toLowerCase();
-    return src.includes('simulat') || src.includes('shim') || src.includes('no-op') || src.includes('noop') || src.includes('dry-run') || src.includes('dry run');
-  }
-
-  if (Array.isArray(value)) {
-    return value.some(item => hasSimulatedSignal(item, depth + 1));
-  }
-
-  if (typeof value === 'object') {
-    if (value.simulated === true || value.shim === true || value.noop === true || value.noOp === true || value.dryRun === true) {
-      return true;
-    }
-
-    return Object.entries(value).some(([key, val]) => {
-      const keyLc = String(key || '').toLowerCase();
-      if (['simulated', 'shim', 'noop', 'noop', 'dryrun', 'dry_run'].includes(keyLc)) {
-        return hasSimulatedSignal(val, depth + 1);
-      }
-      if (['message', 'reason', 'note', 'status', 'resultrepr', 'output', 'rawstdout', 'rawstderr'].includes(keyLc)) {
-        return hasSimulatedSignal(val, depth + 1);
-      }
-      return false;
-    });
-  }
-
-  return false;
 }
 
 const PRINTHEAD_POSITION_TO_ENUM = Object.freeze({
@@ -355,16 +320,36 @@ function escapeSingleQuotes(value) {
   return String(value).replace(/'/g, `'"'"'`);
 }
 
+function buildSshArgs(settings) {
+  // Deterministic SSH args: BatchMode=yes for non-interactive (prevents hangs), key file only if exists
+  // -F NUL (Windows) or -F /dev/null (non-Windows) prevents reading user/system SSH configs
+  const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  const args = [
+    '-F', nullDevice,
+    '-o', 'BatchMode=yes',
+    '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'IdentitiesOnly=yes',
+    '-o', 'PreferredAuthentications=publickey',
+    '-o', 'ConnectTimeout=15',
+    '-p', String(settings.sshPort),
+    ...(settings.sshKeyPath && fs.existsSync(settings.sshKeyPath) ? ['-i', settings.sshKeyPath] : []),
+    `${settings.sshUser}@${settings.sshHost}`
+  ];
+  return args;
+}
+
 function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const env = process.env;
   const backend = String(env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
 
-  // Hardcoded production target (requested): stable endpoint/user/pass.
-  const sshHost = ARROW_PES.host;
-  const sshUser = 'root';
-  const sshPassword = 'root';
+  const sshHost = String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || ARROW_PES.host).trim();
+  const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || '').trim();
+  const sshPassword = String(env.MEMJET_SSH_PASSWORD || env.RIP_SSH_PASSWORD || '').trim();
 
-  const defaultUserKey = env.USERPROFILE ? `${env.USERPROFILE}\\.ssh\\id_ed25519` : '';
+  // Deterministic SSH key path: hardcoded for Arrow rig to avoid USERPROFILE variability
+  const defaultUserKey = process.platform === 'win32'
+    ? 'C:\\Users\\Arrow\\.ssh\\id_ed25519'
+    : path.join(env.HOME || '', '.ssh', 'id_ed25519');
   const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || defaultUserKey).trim();
   const sshPort = Number(env.MEMJET_SSH_PORT || env.RIP_SSH_PORT || 22);
   const sshBin = String(env.MEMJET_SSH_BIN || 'ssh').trim();
@@ -408,13 +393,19 @@ function interpolateTemplate(template, vars) {
 }
 
 function resolveBundledPlinkPath() {
-  const envPath = String(process.env.MEMJET_PLINK_PATH || '').trim();
+  // Check explicit env override first for non-interactive reliability
+  const envPath = String(process.env.MEMJET_PLINK_PATH || process.env.PLINK_PATH || '').trim();
   if (envPath && fs.existsSync(envPath)) return envPath;
 
+  // Deterministic search: workspace-relative paths first, then system locations
   const candidates = [
+    path.resolve(process.cwd(), 'runtime', 'bin', 'plink.exe'),
     path.resolve(process.cwd(), 'bin', 'plink.exe'),
+    path.resolve(__dirname, '..', 'runtime', 'bin', 'plink.exe'),
     path.resolve(__dirname, '..', 'bin', 'plink.exe'),
-    path.resolve(process.resourcesPath || '', 'bin', 'plink.exe')
+    path.resolve(process.resourcesPath || '', 'bin', 'plink.exe'),
+    'C:\\Program Files\\PuTTY\\plink.exe',
+    'C:\\Program Files (x86)\\PuTTY\\plink.exe'
   ].filter(Boolean);
 
   return candidates.find(candidate => {
@@ -455,15 +446,7 @@ async function runSshOperation({ settings, operation, payload, logger }) {
     throw new Error('SSH backend command template produced empty command. Check MEMJET_SSH_REMOTE_CMD_TEMPLATE.');
   }
 
-  const sshArgs = [
-    '-o', 'BatchMode=no',
-    '-o', 'StrictHostKeyChecking=accept-new',
-    '-o', 'PreferredAuthentications=password,keyboard-interactive,publickey',
-    '-p', String(settings.sshPort),
-    ...(settings.sshKeyPath ? ['-i', settings.sshKeyPath] : []),
-    `${settings.sshUser}@${settings.sshHost}`,
-    remoteCommand
-  ];
+  const sshArgs = [...buildSshArgs(settings), remoteCommand];
 
   if (logger?.info) {
     logger.info({
@@ -489,15 +472,19 @@ async function runSshOperation({ settings, operation, payload, logger }) {
         throw new Error('Windows password SSH requires plink. Add bin/plink.exe (vendored) or install PuTTY/plink in PATH.');
       }
 
-      run = await execFileAsync(plinkBin, [
-        '-batch',
-        '-hostkey', ARROW_PES.sshHostKeyEd25519,
+      const plinkArgs = ['-batch'];
+      if (ARROW_PES.sshHostKeyFingerprint) {
+        plinkArgs.push('-hostkey', ARROW_PES.sshHostKeyFingerprint);
+      }
+      plinkArgs.push(
         '-P', String(settings.sshPort),
         '-l', settings.sshUser,
         '-pw', settings.sshPassword,
         settings.sshHost,
         remoteCommand
-      ], {
+      );
+
+      run = await execFileAsync(plinkBin, plinkArgs, {
         timeout: settings.sshTimeoutMs,
         maxBuffer: 8 * 1024 * 1024
       });
@@ -529,13 +516,21 @@ async function runSshOperation({ settings, operation, payload, logger }) {
       rawStderr: stderr.slice(0, 4000)
     };
     if (logger?.info) {
-      logger.info({ msg: 'memjet.ssh.exec.result', operation, parsed: false, result: rawResult });
+      logger.info({ msg: 'memjet.ssh.exec.result', operation, parsed: false, lineCount: lines.length, result: rawResult });
     }
     return rawResult;
   }
 
   if (logger?.info) {
-    logger.info({ msg: 'memjet.ssh.exec.result', operation, parsed: true, result: parsed });
+    const hasOutput = parsed.output || parsed.rawStdout || parsed.resultRepr || parsed.raw;
+    logger.info({
+      msg: 'memjet.ssh.exec.result',
+      operation,
+      parsed: true,
+      hasOutput: Boolean(hasOutput),
+      ok: parsed.ok,
+      resultType: typeof parsed
+    });
   }
 
   if (parsed.ok === false) {
@@ -915,7 +910,32 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
 
   return {
     async getStatus() {
-      return call('getStatus', {});
+      const start = Date.now();
+      try {
+        const result = await call('getStatus', {});
+        const duration = Date.now() - start;
+        const hasOutput = result && (result.output || result.rawStdout || result.resultRepr);
+        if (logger?.info) {
+          logger.info({
+            msg: 'memjet.ssh.getStatus.ok',
+            durationMs: duration,
+            hasOutput: Boolean(hasOutput),
+            resultType: typeof result,
+            ok: result?.ok
+          });
+        }
+        return result;
+      } catch (error) {
+        const duration = Date.now() - start;
+        if (logger?.warn) {
+          logger.warn({
+            msg: 'memjet.ssh.getStatus.fail',
+            durationMs: duration,
+            error: error?.message || String(error)
+          });
+        }
+        throw error;
+      }
     },
 
     async getProductInfo() {
@@ -1053,6 +1073,160 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
   };
 }
 
+async function runSshSelfCheck(settings, logger) {
+  // Perform SSH auth + getStatus parse check
+  // Returns { ok: boolean, reason?: string, category?: string, error?: Error }
+  const start = Date.now();
+
+  // Test 1: SSH connectivity (auth only - use 'true' command)
+  try {
+    const sshArgs = buildSshArgs(settings);
+    sshArgs.push('true'); // Simple no-op command to test auth
+
+    await execFileAsync(settings.sshBin, sshArgs, {
+      timeout: settings.sshTimeoutMs,
+      maxBuffer: 256 * 1024
+    });
+  } catch (error) {
+    const stderr = String(error?.stderr || '').trim();
+    const stdout = String(error?.stdout || '').trim();
+    const code = error?.code ?? error?.signal ?? 'unknown';
+
+    // Classify SSH auth errors
+    let category = 'ssh_auth';
+    let reason = `SSH authentication failed (${code})`;
+
+    if (stderr.includes('Permission denied') || stderr.includes('Authentication failed')) {
+      category = 'ssh_auth_denied';
+      reason = 'SSH authentication denied - check key file permissions and authorized_keys on target';
+    } else if (stderr.includes('Could not resolve hostname') || stderr.includes('Name or service not known')) {
+      category = 'ssh_host_unreachable';
+      reason = 'SSH target host unreachable - check MEMJET_SSH_HOST and network connectivity';
+    } else if (stderr.includes('Connection refused')) {
+      category = 'ssh_connection_refused';
+      reason = 'SSH connection refused - check MEMJET_SSH_PORT and that SSH service is running on target';
+    } else if (stderr.includes('Connection timed out') || stderr.includes('timeout')) {
+      category = 'ssh_timeout';
+      reason = 'SSH connection timeout - check network connectivity and firewall rules';
+    } else if (stderr.includes('No such file or directory') && stderr.includes('.ssh')) {
+      category = 'ssh_key_missing';
+      reason = `SSH key file not found at ${settings.sshKeyPath} - verify key path and file exists`;
+    } else if (stderr.includes('config')) {
+      category = 'ssh_auth_config';
+      reason = 'SSH configuration error - check SSH client config and key permissions';
+    }
+
+    if (logger?.error) {
+      logger.error({
+        msg: 'memjet.ssh.selfCheck.authFailed',
+        category,
+        reason,
+        sshHost: settings.sshHost,
+        sshUser: settings.sshUser,
+        sshPort: settings.sshPort,
+        sshKeyPath: settings.sshKeyPath,
+        durationMs: Date.now() - start,
+        code,
+        stderr: stderr.slice(0, 500),
+        stdout: stdout.slice(0, 500)
+      });
+    }
+
+    return { ok: false, category, reason, error };
+  }
+
+  // Test 2: getStatus parse check
+  try {
+    const argsJson = JSON.stringify({});
+    const argsJsonB64 = Buffer.from(argsJson, 'utf8').toString('base64');
+
+    const remoteCommand = interpolateTemplate(settings.cmdTemplate, {
+      operation: 'getStatus',
+      args_json: argsJson,
+      args_json_escaped: escapeSingleQuotes(argsJson),
+      args_json_b64: argsJsonB64,
+      host: settings.defaultParams.host,
+      commandPort: settings.defaultParams.commandPort,
+      eventPort: settings.defaultParams.eventPort,
+      dataPort: settings.defaultParams.dataPort
+    });
+
+    const sshArgs = buildSshArgs(settings);
+    sshArgs.push(remoteCommand);
+
+    const { stdout } = await execFileAsync(settings.sshBin, sshArgs, {
+      timeout: settings.sshTimeoutMs,
+      maxBuffer: 8 * 1024 * 1024
+    });
+
+    const lines = String(stdout || '').trim().split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const jsonLine = [...lines].reverse().find(line => line.startsWith('{') || line.startsWith('['));
+    const parsed = parseJsonSafe(jsonLine || stdout, null);
+
+    if (!parsed) {
+      const reason = 'getStatus returned non-JSON response - check MEMJET_SSH_REMOTE_CMD_TEMPLATE points to valid pesctl';
+      if (logger?.error) {
+        logger.error({
+          msg: 'memjet.ssh.selfCheck.parseFailed',
+          category: 'status_parse_error',
+          reason,
+          stdout: String(stdout || '').slice(0, 500),
+          durationMs: Date.now() - start
+        });
+      }
+      return { ok: false, category: 'status_parse_error', reason };
+    }
+
+    if (parsed.ok === false) {
+      const reason = `getStatus remote error: ${parsed.error || 'unknown'} - ${parsed.message || 'no message'}`;
+      if (logger?.error) {
+        logger.error({
+          msg: 'memjet.ssh.selfCheck.remoteError',
+          category: 'status_remote_error',
+          reason,
+          remoteError: parsed.error,
+          remoteMessage: parsed.message,
+          durationMs: Date.now() - start
+        });
+      }
+      return { ok: false, category: 'status_remote_error', reason };
+    }
+
+  } catch (error) {
+    const msg = String(error?.message || '');
+    let category = 'status_command_failed';
+    let reason = `getStatus command failed: ${msg}`;
+
+    if (msg.includes('pesctl') || msg.includes('command not found')) {
+      category = 'pesctl_not_found';
+      reason = 'pesctl command not found on remote host - check MEMJET_SSH_REMOTE_CMD_TEMPLATE and remote installation';
+    }
+
+    if (logger?.error) {
+      logger.error({
+        msg: 'memjet.ssh.selfCheck.statusFailed',
+        category,
+        reason,
+        error: msg,
+        durationMs: Date.now() - start
+      });
+    }
+
+    return { ok: false, category, reason, error };
+  }
+
+  if (logger?.info) {
+    logger.info({
+      msg: 'memjet.ssh.selfCheck.ok',
+      durationMs: Date.now() - start,
+      sshHost: settings.sshHost,
+      sshUser: settings.sshUser
+    });
+  }
+
+  return { ok: true };
+}
+
 function isSshConfigured(env = process.env) {
   return Boolean(
     String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || '').trim() &&
@@ -1113,4 +1287,12 @@ async function createClient(params) {
   );
 }
 
-module.exports = { createClient, selectBackendCandidates, isSshConfigured };
+module.exports = {
+  createClient,
+  selectBackendCandidates,
+  isSshConfigured,
+  loadArrowPesDefaults,
+  buildSshArgs,
+  buildSshSettings,
+  runSshSelfCheck
+};

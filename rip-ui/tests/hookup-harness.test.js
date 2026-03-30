@@ -14,12 +14,20 @@ class Element {
     this._innerHTML = '';
     this.onclick = null;
     this.dataset = {};
+    this._attributes = {};
     this._buttons = [];
     this.value = '';
     this.disabled = false;
     this.title = '';
-    this.classList = { add() {}, remove() {} };
+    this.style = {};
+    this.children = [];
+    this.classList = { add() {}, remove() {}, toggle() {}, contains() { return false; } };
   }
+
+  setAttribute(name, value) { this._attributes[name] = String(value); }
+  getAttribute(name) { return this._attributes[name] ?? null; }
+  appendChild(child) { this.children.push(child); return child; }
+  removeChild(child) { const i = this.children.indexOf(child); if (i !== -1) this.children.splice(i, 1); return child; }
 
   set innerHTML(value) {
     this._innerHTML = value;
@@ -124,12 +132,16 @@ function createHarness() {
       },
       setItem(k, v) {
         local.set(k, String(v));
+      },
+      removeItem(k) {
+        local.delete(k);
       }
     },
     setTimeout: fn => {
       timeoutQueue.push(fn);
       return timeoutQueue.length;
     },
+    clearTimeout: () => {},
     setInterval: fn => {
       intervalId += 1;
       intervals.set(intervalId, fn);
@@ -138,6 +150,16 @@ function createHarness() {
     clearInterval: id => {
       intervals.delete(id);
     },
+    requestAnimationFrame: () => 0,
+    cancelAnimationFrame: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    devicePixelRatio: 1,
+    console,
+    navigator: { userAgent: 'test' },
+    fetch: () => Promise.reject(new Error('no network in test')),
+    confirm: () => true,
+    prompt: () => '1',
     Blob: class {
       constructor(parts) {
         this.parts = parts;
@@ -151,6 +173,7 @@ function createHarness() {
     }
   };
 
+  context.window = { ...context, ripBridge };
   vm.createContext(context);
   const source = fs.readFileSync(APP_JS, 'utf8');
   vm.runInContext(source, context, { filename: APP_JS });
@@ -193,13 +216,14 @@ function createHarness() {
   h.elements.btnTestData.click();
   await Promise.resolve();
 
-  h.elements.controls.querySelectorAll('button').find(b => b.dataset.c === 'clear').click();
+  const ctrlBtns = h.elements.controls.querySelectorAll('button');
+  ctrlBtns.find(b => b.dataset.c === 'clear')?.click();
   await Promise.resolve();
-  h.elements.controls.querySelectorAll('button').find(b => b.dataset.c === 'initialise').click();
+  ctrlBtns.find(b => b.dataset.c === 'initialise')?.click();
   await Promise.resolve();
-  h.elements.controls.querySelectorAll('button').find(b => b.dataset.c === 'prepare').click();
+  ctrlBtns.find(b => b.dataset.c === 'prepare')?.click();
   await Promise.resolve();
-  h.elements.controls.querySelectorAll('button').find(b => b.dataset.c === 'start').click();
+  ctrlBtns.find(b => b.dataset.c === 'start')?.click();
   await Promise.resolve();
 
   h.flushTimers();

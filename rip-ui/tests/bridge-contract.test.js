@@ -2,51 +2,58 @@ const assert = require('node:assert/strict');
 const { createBridgeContract } = require('../electron/bridge-contract');
 const { createRipBackend } = require('../electron/rip-backend');
 
+const silentLogger = {
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  debug: () => {}
+};
+
 async function run() {
-  const liveLike = createBridgeContract({ backend: createRipBackend({ mode: 'simulator' }) });
+  const backend = createRipBackend({ mode: 'bridge-http', logger: silentLogger });
+  const contract = createBridgeContract({ backend, logger: silentLogger });
 
-  const runtime = await liveLike.getRuntimeConfig();
+  const runtime = await contract.getRuntimeConfig();
   assert.equal(typeof runtime.sessionId, 'string');
-
-  const status = await liveLike.getStatus(null, {});
-  assert.match(status.engineState, /OFF|READY|PRINTING|IDLE|UNKNOWN/);
-  assert.match(status.source, /^electron-/);
-  assert.equal(typeof status.timestamp, 'string');
-
-  const runKnown = await liveLike.runCommand(null, { command: 'prepare' });
-  assert.equal(runKnown.accepted, true);
-  assert.equal(runKnown.command, 'prepare');
+  assert.equal(typeof runtime.mode, 'string');
+  console.log('  ✓ getRuntimeConfig returns session');
 
   await assert.rejects(
-    () => liveLike.runCommand(null, {}),
-    error => /supported/.test(error.message)
+    () => contract.getStatus(null, {}),
+    error => error.bridgeError && error.bridgeError.code === 'BRIDGE_UNAVAILABLE'
   );
+  console.log('  ✓ getStatus throws bridgeError when bridge not running');
 
-  const submit = await liveLike.submitJob(null, {
-    jobId: 'JOB-0001A',
-    fileName: 'sample.pdf',
-    config: { host: '127.0.0.1', dataPort: 13001 },
-    settings: { fitMode: 'none' }
-  });
-  assert.equal(typeof submit.accepted, 'boolean');
+  await assert.rejects(
+    () => contract.runCommand(null, {}),
+    error => error.bridgeError != null
+  );
+  console.log('  ✓ runCommand rejects empty payload');
 
-  const audit = await liveLike.appendAudit(null, { type: 'test', note: 'bridge test' });
+  await assert.rejects(
+    () => contract.runCommand(null, { command: 'prepare', config: { host: '127.0.0.1', commandPort: 13001 } }),
+    error => error.bridgeError != null
+  );
+  console.log('  ✓ runCommand propagates bridge error for valid command when bridge down');
+
+  const audit = await contract.appendAudit(null, { type: 'test', note: 'contract test' });
   assert.equal(audit.ok, true);
+  console.log('  ✓ appendAudit succeeds locally');
 
-  const badEndpoint = await liveLike.testEndpoint(null, { host: '', port: 0 });
+  const badEndpoint = await contract.testEndpoint(null, { host: '', port: 0 });
   assert.equal(badEndpoint.ok, false);
   assert.match(badEndpoint.message, /invalid/i);
+  console.log('  ✓ testEndpoint rejects invalid endpoint');
 
-  const notConfigured = createBridgeContract({ backend: createRipBackend({ mode: 'not-configured' }) });
+  const unavailable = createBridgeContract({
+    backend: createRipBackend({ mode: 'unsupported-mode', logger: silentLogger }),
+    logger: silentLogger
+  });
   await assert.rejects(
-    () => notConfigured.getStatus(null, { host: '127.0.0.1', port: 13002 }),
-    error => /not configured/i.test(error.message)
+    () => unavailable.getStatus(null, {}),
+    error => error.bridgeError && /BRIDGE_UNAVAILABLE/.test(error.bridgeError.code)
   );
-
-  await assert.rejects(
-    () => notConfigured.runCommand(null, { command: 'start' }),
-    error => /requires backend configuration/i.test(error.message)
-  );
+  console.log('  ✓ unsupported mode yields BRIDGE_UNAVAILABLE');
 
   console.log('bridge-contract.test: PASS');
 }

@@ -606,7 +606,10 @@ RasterFileInfo PDFRasterizer::rasterizeToFile(const std::string& pdfPath,
         cmd << "-q -dNOPAUSE -dBATCH -dSAFER ";
         cmd << "-dPDFSTOPONERROR ";
         cmd << "-dAutoRotatePages=/None ";
-        cmd << "-dBandBufferSpace=200000000 -dBufferSpace=200000000 ";
+        const int64_t bandBufferSpace = 50000000;
+        const int64_t bufferSpace = 50000000;
+        cmd << "-dBandBufferSpace=" << bandBufferSpace << " ";
+        cmd << "-dBufferSpace=" << bufferSpace << " ";
         cmd << "-sDEVICE=pgmraw ";
 
         if (xDpi == yDpi) {
@@ -642,6 +645,7 @@ RasterFileInfo PDFRasterizer::rasterizeToFile(const std::string& pdfPath,
 
         const std::string cmd = buildGhostscriptCommand(tempPgm, stderrFile);
         std::cout << "[INFO] Executing GS (attempt " << attempt << "/2): " << cmd << std::endl;
+        std::cout << "[INFO] Effective Ghostscript buffer settings: BandBufferSpace=50000000, BufferSpace=50000000" << std::endl;
         int status = system(cmd.c_str());
 
         const std::string errMsg = readTextFile(stderrFile);
@@ -866,7 +870,10 @@ CmykRasterData PDFRasterizer::rasterizeToCmykPlanes(const std::string& pdfPath,
         cmd << "-q -dNOPAUSE -dBATCH -dSAFER ";
         cmd << "-dPDFSTOPONERROR ";
         cmd << "-dAutoRotatePages=/None ";
-        cmd << "-dBandBufferSpace=200000000 -dBufferSpace=200000000 ";
+        const int64_t bandBufferSpace = 50000000;
+        const int64_t bufferSpace = 50000000;
+        cmd << "-dBandBufferSpace=" << bandBufferSpace << " ";
+        cmd << "-dBufferSpace=" << bufferSpace << " ";
         cmd << "-sDEVICE=pamcmyk32 ";
 
         if (xDpi == yDpi) {
@@ -957,6 +964,7 @@ CmykRasterData PDFRasterizer::rasterizeToCmykPlanes(const std::string& pdfPath,
 
         const std::string cmd = buildCmykRasterCommand(attemptPam, attemptErr);
         std::cout << "[INFO] Executing CMYK raster (attempt " << attempt << "/2): " << cmd << std::endl;
+        std::cout << "[INFO] Effective Ghostscript buffer settings: BandBufferSpace=50000000, BufferSpace=50000000" << std::endl;
         int status = system(cmd.c_str());
 
         const std::string errMsg = readTextFile(attemptErr);

@@ -1,4 +1,4 @@
 {
   "readOnlyDiscovery": true,
-  "hint": "Read-only discovery mode is active. Unlock discovery mode, then start status polling to enable mutating commands."
+  "hint": "Read-only discovery mode is active. Unlock discovery mode to enable mutating commands."
 }

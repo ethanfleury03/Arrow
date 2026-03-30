@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
-const { selectBackendCandidates } = require('../bridge/real-client-factory.local');
+const path = require('node:path');
+const { selectBackendCandidates, loadArrowPesDefaults, buildSshArgs } = require('../bridge/real-client-factory.local');
 
 function run() {
   const autoNoSsh = selectBackendCandidates({ MEMJET_REAL_BACKEND: 'auto' });
@@ -27,7 +28,142 @@ function run() {
   assert.equal(explicitSsh.requestedBackend, 'ssh');
   assert.deepEqual(explicitSsh.candidates, ['ssh']);
 
+  testPesDefaultsFromEnv();
+  testNoHardcodedCredentials();
+  testSshKeyPathDefaults();
+  testSshBatchModeEnforced();
+  testSshArgsConstruction();
+  testSshNoConfigFile();
+
   console.log('real-client-selection.test: PASS');
+}
+
+function testPesDefaultsFromEnv() {
+  const defaults = loadArrowPesDefaults();
+  assert.equal(typeof defaults.host, 'string');
+  assert.ok(defaults.host.length > 0, 'PES host must resolve to a non-empty string');
+  assert.equal(typeof defaults.commandPort, 'number');
+  assert.equal(typeof defaults.sshHostKeyFingerprint, 'string');
+  console.log('  ✓ testPesDefaultsFromEnv');
+}
+
+function testNoHardcodedCredentials() {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'bridge', 'real-client-factory.local.js'), 'utf8');
+  const passwordPatterns = [
+    /sshPassword\s*=\s*['"][^'"]+['"]/,
+    /sshUser\s*=\s*['"]root['"]/
+  ];
+  for (const pattern of passwordPatterns) {
+    assert.equal(
+      pattern.test(src),
+      false,
+      `Source must not contain hardcoded credential pattern: ${pattern}`
+    );
+  }
+  console.log('  ✓ testNoHardcodedCredentials');
+}
+
+function testSshKeyPathDefaults() {
+  const fs = require('node:fs');
+  const srcPath = path.join(__dirname, '..', 'bridge', 'real-client-factory.local.js');
+  const src = fs.readFileSync(srcPath, 'utf8');
+
+  // Verify hardcoded Windows key path for Arrow rig (exact path, no USERPROFILE)
+  // In JS source, backslash is escaped as \, so the literal text is: C:\Users\Arrow\.ssh\id_ed25519
+  assert.ok(
+    src.includes('C:\\\\Users\\\\Arrow\\\\.ssh\\\\id_ed25519'),
+    'Source must hardcode Windows SSH key path to C:\\Users\\Arrow\\.ssh\\id_ed25519 for deterministic behavior'
+  );
+
+  // Verify the path is NOT constructed using USERPROFILE
+  assert.ok(
+    !src.includes('env.USERPROFILE') && !src.includes('process.env.USERPROFILE'),
+    'Source must NOT use USERPROFILE for SSH key path to avoid variability'
+  );
+
+  console.log('  ✓ testSshKeyPathDefaults');
+}
+
+function testSshBatchModeEnforced() {
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'bridge', 'real-client-factory.local.js'), 'utf8');
+
+  // Verify BatchMode=yes is used (not BatchMode=no)
+  assert.ok(
+    src.includes("'BatchMode=yes'"),
+    'Source must enforce non-interactive SSH with BatchMode=yes'
+  );
+
+  // Verify BatchMode=no is NOT used
+  assert.ok(
+    !src.includes("'BatchMode=no'"),
+    'Source must NOT use BatchMode=no which allows interactive prompts'
+  );
+
+  // Verify only publickey auth is preferred (no password/keyboard-interactive)
+  assert.ok(
+    src.includes("'PreferredAuthentications=publickey'"),
+    'Source must use PreferredAuthentications=publickey for non-interactive auth'
+  );
+
+  console.log('  ✓ testSshBatchModeEnforced');
+}
+
+function testSshArgsConstruction() {
+  const settings = {
+    sshHost: '192.168.111.1',
+    sshUser: 'arrow',
+    sshPort: 22,
+    sshKeyPath: '/fake/key/path',
+    defaultParams: { host: '192.168.111.1', commandPort: '13001', eventPort: '9231', dataPort: '13001' }
+  };
+
+  const args = buildSshArgs(settings);
+
+  // Verify required SSH options are present
+  assert.ok(args.includes('-o'), 'SSH args must include -o for options');
+  assert.ok(args.includes('BatchMode=yes'), 'SSH args must include BatchMode=yes');
+  assert.ok(args.includes('IdentitiesOnly=yes'), 'SSH args must include IdentitiesOnly=yes');
+  assert.ok(args.includes('StrictHostKeyChecking=accept-new'), 'SSH args must include StrictHostKeyChecking=accept-new');
+  assert.ok(args.includes('PreferredAuthentications=publickey'), 'SSH args must include PreferredAuthentications=publickey');
+  assert.ok(args.includes('ConnectTimeout=15'), 'SSH args must include ConnectTimeout=15');
+
+  // Verify port option
+  const portIndex = args.indexOf('-p');
+  assert.ok(portIndex !== -1, 'SSH args must include -p flag');
+  assert.equal(args[portIndex + 1], '22', 'SSH port must be 22');
+
+  // Verify target host format
+  const userHost = `${settings.sshUser}@${settings.sshHost}`;
+  assert.ok(args.includes(userHost), `SSH args must include target ${userHost}`);
+
+  console.log('  ✓ testSshArgsConstruction');
+}
+
+function testSshNoConfigFile() {
+  const settings = {
+    sshHost: '192.168.111.1',
+    sshUser: 'arrow',
+    sshPort: 22,
+    sshKeyPath: '/fake/key/path',
+    defaultParams: { host: '192.168.111.1', commandPort: '13001', eventPort: '9231', dataPort: '13001' }
+  };
+
+  const args = buildSshArgs(settings);
+
+  // Verify -F NUL (Windows) or -F /dev/null (non-Windows) is present
+  const expectedNullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  const fIndex = args.indexOf('-F');
+  assert.ok(fIndex !== -1, 'SSH args must include -F flag');
+  assert.equal(args[fIndex + 1], expectedNullDevice, `SSH args must use -F ${expectedNullDevice} to ignore system SSH configs`);
+
+  // Verify -F is the first argument (must come before other options)
+  assert.equal(args[0], '-F', 'SSH -F flag must be the first argument');
+  assert.equal(args[1], expectedNullDevice, 'SSH -F value must be second argument');
+
+  console.log('  ✓ testSshNoConfigFile');
 }
 
 run();

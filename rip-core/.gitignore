@@ -42,6 +42,7 @@ logs/
 # Keep important text files if needed:
 !README.txt
 !CHANGELOG.txt
+!requirements.txt
 captures/
 *.pcap
 *.pcapng

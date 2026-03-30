@@ -1,15 +1,18 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const {
+  DEFAULT_PES_HOST, DEFAULT_COMMAND_PORT, DEFAULT_EVENT_PORT, DEFAULT_DATA_PORT
+} = require('../bridge/pes-defaults');
 
 const DEFAULT_PROFILE = 'kareela-lab';
 
 const OPERATOR_PROFILES = {
   'kareela-lab': {
     backendMode: 'bridge-http',
-    host: '192.168.111.1',
-    commandPort: 13002,
-    eventPort: 9231,
-    dataPort: 13001,
+    host: DEFAULT_PES_HOST,
+    commandPort: DEFAULT_COMMAND_PORT,
+    eventPort: DEFAULT_EVENT_PORT,
+    dataPort: DEFAULT_DATA_PORT,
     bridgeHost: '127.0.0.1',
     bridgePort: 8787,
     adapterHost: '127.0.0.1',
@@ -41,9 +44,9 @@ function normalizeConfig(raw = {}) {
   return {
     backendMode: String(raw.backendMode || 'bridge-http').trim(),
     host: String(raw.host || '127.0.0.1').trim(),
-    commandPort: clampInt(raw.commandPort, 13002, 1, 65535),
-    eventPort: clampInt(raw.eventPort, 9231, 1, 65535),
-    dataPort: clampInt(raw.dataPort, 13001, 1, 65535),
+    commandPort: clampInt(raw.commandPort, DEFAULT_COMMAND_PORT, 1, 65535),
+    eventPort: clampInt(raw.eventPort, DEFAULT_EVENT_PORT, 1, 65535),
+    dataPort: clampInt(raw.dataPort, DEFAULT_DATA_PORT, 1, 65535),
     bridgeHost: String(raw.bridgeHost || '127.0.0.1').trim(),
     bridgePort: clampInt(raw.bridgePort, 8787, 1, 65535),
     adapterHost: String(raw.adapterHost || raw.bridgeHost || '127.0.0.1').trim(),

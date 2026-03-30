@@ -3,10 +3,10 @@ const { loadBridgeConfig } = require('../bridge/config');
 
 function run() {
   const defaults = loadBridgeConfig({});
-  assert.equal(defaults.memjet.host, '192.168.111.1');
-  assert.equal(defaults.memjet.commandPort, 13002);
-  assert.equal(defaults.memjet.eventPort, 9231);
-  assert.equal(defaults.memjet.dataPort, 13001);
+  assert.equal(defaults.memjet.host, '192.168.111.1', 'default PES host must match pes-defaults');
+  assert.equal(defaults.memjet.commandPort, 13001, 'default command port must match pes-defaults');
+  assert.equal(defaults.memjet.eventPort, 9231, 'default event port must match pes-defaults');
+  assert.equal(defaults.memjet.dataPort, 13001, 'default data port must match pes-defaults');
 
   const legacy = loadBridgeConfig({
     MEMJET_HOST: '10.0.0.2',

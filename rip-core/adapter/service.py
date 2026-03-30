@@ -135,6 +135,26 @@ def _consume_line(job: Dict[str, Any], line: str) -> None:
         job["error_code"] = str(payload["error_code"])
 
 
+def _stream_reader(stream, job_id: str) -> None:
+    """Read lines from a subprocess stream and feed them into the job log.
+
+    Runs in a dedicated thread so stdout and stderr are consumed
+    concurrently, preventing pipe-buffer deadlocks.
+    """
+    try:
+        for line in stream:
+            with _lock:
+                job = _jobs[job_id]
+                _consume_line(job, line)
+    except ValueError:
+        pass
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+
 def _run_job(job_id: str, command: List[str], env_overrides: Dict[str, str]) -> None:
     with _lock:
         job = _jobs[job_id]
@@ -162,11 +182,13 @@ def _run_job(job_id: str, command: List[str], env_overrides: Dict[str, str]) -> 
     assert proc.stdout is not None
     assert proc.stderr is not None
 
-    for stream in (proc.stdout, proc.stderr):
-        for line in stream:
-            with _lock:
-                job = _jobs[job_id]
-                _consume_line(job, line)
+    stdout_thread = threading.Thread(target=_stream_reader, args=(proc.stdout, job_id), daemon=True)
+    stderr_thread = threading.Thread(target=_stream_reader, args=(proc.stderr, job_id), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+
+    stdout_thread.join()
+    stderr_thread.join()
 
     exit_code = proc.wait()
     with _lock:
