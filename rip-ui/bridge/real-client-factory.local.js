@@ -328,7 +328,10 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || '').trim();
   const sshPassword = String(env.MEMJET_SSH_PASSWORD || env.RIP_SSH_PASSWORD || '').trim();
 
-  const defaultUserKey = env.USERPROFILE ? `${env.USERPROFILE}\\.ssh\\id_ed25519` : '';
+  const defaultWindowsKey = 'C:\\Users\\Arrow\\.ssh\\id_ed25519';
+  const defaultUserKey = process.platform === 'win32'
+    ? (env.USERPROFILE ? `${env.USERPROFILE}\\.ssh\\id_ed25519` : defaultWindowsKey)
+    : (env.HOME ? `${env.HOME}/.ssh/id_ed25519` : '');
   const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || defaultUserKey).trim();
   const sshPort = Number(env.MEMJET_SSH_PORT || env.RIP_SSH_PORT || 22);
   const sshBin = String(env.MEMJET_SSH_BIN || 'ssh').trim();
@@ -378,7 +381,9 @@ function resolveBundledPlinkPath() {
   const candidates = [
     path.resolve(process.cwd(), 'bin', 'plink.exe'),
     path.resolve(__dirname, '..', 'bin', 'plink.exe'),
-    path.resolve(process.resourcesPath || '', 'bin', 'plink.exe')
+    path.resolve(process.resourcesPath || '', 'bin', 'plink.exe'),
+    'C:\\Program Files\\PuTTY\\plink.exe',
+    'C:\\Program Files (x86)\\PuTTY\\plink.exe'
   ].filter(Boolean);
 
   return candidates.find(candidate => {
@@ -422,7 +427,8 @@ async function runSshOperation({ settings, operation, payload, logger }) {
   const sshArgs = [
     '-o', 'BatchMode=no',
     '-o', 'StrictHostKeyChecking=accept-new',
-    '-o', 'PreferredAuthentications=password,keyboard-interactive,publickey',
+    '-o', 'IdentitiesOnly=yes',
+    '-o', 'PreferredAuthentications=publickey,password,keyboard-interactive',
     '-p', String(settings.sshPort),
     ...(settings.sshKeyPath ? ['-i', settings.sshKeyPath] : []),
     `${settings.sshUser}@${settings.sshHost}`,
