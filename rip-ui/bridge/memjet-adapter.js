@@ -184,6 +184,17 @@ class ThriftMemjetAdapter extends MemjetAdapter {
     return diagnostics;
   }
 
+  invalidateClient(reason) {
+    if (this._client) {
+      this.logger.info({ msg: 'memjet.client.invalidated', reason });
+      try {
+        if (typeof this._client.close === 'function') this._client.close();
+        else if (typeof this._client.destroy === 'function') this._client.destroy();
+      } catch (_) {}
+      this._client = null;
+    }
+  }
+
   async _ensureClient() {
     if (this._client) return this._client;
 
@@ -211,22 +222,29 @@ class ThriftMemjetAdapter extends MemjetAdapter {
   async _statusQuery() {
     const client = await this._ensureClient();
 
-    if (typeof client.getStatus === 'function') {
-      const result = await client.getStatus();
-      this._recordRealCall('getStatus', true, 'status query succeeded');
-      return result;
-    }
+    try {
+      if (typeof client.getStatus === 'function') {
+        const result = await client.getStatus();
+        this._recordRealCall('getStatus', true, 'status query succeeded');
+        return result;
+      }
 
-    if (typeof client.getProductInfo === 'function') {
-      const result = await client.getProductInfo();
-      this._recordRealCall('getProductInfo', true, 'product info query succeeded');
-      return result;
-    }
+      if (typeof client.getProductInfo === 'function') {
+        const result = await client.getProductInfo();
+        this._recordRealCall('getProductInfo', true, 'product info query succeeded');
+        return result;
+      }
 
-    throw new AdapterCapabilityError(
-      'Client missing required read-only status method (getStatus or getProductInfo)',
-      await this._buildDiagnostics()
-    );
+      throw new AdapterCapabilityError(
+        'Client missing required read-only status method (getStatus or getProductInfo)',
+        await this._buildDiagnostics()
+      );
+    } catch (error) {
+      if (this._isConnectionError(error)) {
+        this.invalidateClient(`connection error during status query: ${error.message}`);
+      }
+      throw error;
+    }
   }
 
   async checkConnectivity() {
@@ -299,15 +317,31 @@ class ThriftMemjetAdapter extends MemjetAdapter {
     };
   }
 
+  _isConnectionError(error) {
+    const msg = String(error?.message || '').toLowerCase();
+    return msg.includes('econnrefused') || msg.includes('econnreset') ||
+      msg.includes('epipe') || msg.includes('socket') ||
+      msg.includes('transport') || msg.includes('not open') ||
+      msg.includes('closed') || msg.includes('timeout');
+  }
+
   async _call(method, args = [], jobId) {
     const client = await this._ensureClient();
     if (typeof client[method] !== 'function') {
       throw new AdapterCapabilityError(`Client missing required method: ${method}`, await this._buildDiagnostics());
     }
     this.logger.info({ msg: 'memjet.call', method, args, jobId });
-    const result = await client[method](...args);
-    this._recordRealCall(method, true, 'call succeeded');
-    return result;
+    try {
+      const result = await client[method](...args);
+      this._recordRealCall(method, true, 'call succeeded');
+      return result;
+    } catch (error) {
+      this._recordRealCall(method, false, error.message);
+      if (this._isConnectionError(error)) {
+        this.invalidateClient(`connection error during ${method}: ${error.message}`);
+      }
+      throw error;
+    }
   }
 
   async _guardCommand(operation) {

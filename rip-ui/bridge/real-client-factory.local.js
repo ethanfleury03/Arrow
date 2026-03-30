@@ -31,6 +31,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 const { execFile } = require('node:child_process');
+const { hasSimulatedSignal } = require('./engine-state');
 
 const execFileAsync = promisify(execFile);
 
@@ -53,40 +54,6 @@ function parseJsonSafe(value, fallback = null) {
   } catch {
     return fallback;
   }
-}
-
-function hasSimulatedSignal(value, depth = 0) {
-  if (depth > 4 || value == null) return false;
-
-  if (typeof value === 'boolean') return value === true;
-
-  if (typeof value === 'string') {
-    const src = value.trim().toLowerCase();
-    return src.includes('simulat') || src.includes('shim') || src.includes('no-op') || src.includes('noop') || src.includes('dry-run') || src.includes('dry run');
-  }
-
-  if (Array.isArray(value)) {
-    return value.some(item => hasSimulatedSignal(item, depth + 1));
-  }
-
-  if (typeof value === 'object') {
-    if (value.simulated === true || value.shim === true || value.noop === true || value.noOp === true || value.dryRun === true) {
-      return true;
-    }
-
-    return Object.entries(value).some(([key, val]) => {
-      const keyLc = String(key || '').toLowerCase();
-      if (['simulated', 'shim', 'noop', 'noop', 'dryrun', 'dry_run'].includes(keyLc)) {
-        return hasSimulatedSignal(val, depth + 1);
-      }
-      if (['message', 'reason', 'note', 'status', 'resultrepr', 'output', 'rawstdout', 'rawstderr'].includes(keyLc)) {
-        return hasSimulatedSignal(val, depth + 1);
-      }
-      return false;
-    });
-  }
-
-  return false;
 }
 
 const PRINTHEAD_POSITION_TO_ENUM = Object.freeze({
