@@ -24,8 +24,8 @@ const INITIAL_STATE = {
   seed: 42,
   counter: 2,
   jobs: [
-    { id: 'JOB-0001', name: 'label_sheet_A.pdf', status: 'queued' },
-    { id: 'JOB-0002', name: 'test_patch_v2.pdf', status: 'held' }
+    { id: 'JOB-0001', name: 'label_sheet_A.pdf', inputPath: 'C:\\Users\\Operator\\Documents\\label_sheet_A.pdf', status: 'queued' },
+    { id: 'JOB-0002', name: 'test_patch_v2.pdf', inputPath: '/home/operator/documents/test_patch_v2.pdf', status: 'held' }
   ],
   queue: [],
   status: {
@@ -1056,6 +1056,45 @@ function normalizeJobStatus(status) {
   return String(status || '').trim().toLowerCase();
 }
 
+/**
+ * Extract basename (filename only) from a path, handling both Windows and Unix paths.
+ * @param {string} path - Full file path
+ * @returns {string|null} - Filename only, or null if invalid
+ */
+function getBasename(path) {
+  if (!path || typeof path !== 'string') return null;
+  // Handle both Windows (\) and Unix (/) path separators
+  const normalized = path.replace(/\\/g, '/');
+  // Remove trailing slash for consistent basename extraction
+  const trimmed = normalized.replace(/\/$/, '');
+  if (!trimmed) return null;
+  const lastSlash = trimmed.lastIndexOf('/');
+  if (lastSlash === -1) return trimmed;
+  return trimmed.substring(lastSlash + 1) || null;
+}
+
+/**
+ * Get display name for a job, prioritizing available fields.
+ * Priority: job.name > basename(job.inputPath) > basename(job.artifactPath) > fallback
+ * @param {Object} job - Job object
+ * @returns {string} - Display name for the job
+ */
+function getJobDisplayName(job) {
+  if (!job || typeof job !== 'object') return '—';
+  // Priority 1: job.name
+  if (job.name && typeof job.name === 'string' && job.name.trim()) {
+    return job.name.trim();
+  }
+  // Priority 2: basename of inputPath
+  const inputBasename = getBasename(job.inputPath);
+  if (inputBasename) return inputBasename;
+  // Priority 3: basename of artifactPath
+  const artifactBasename = getBasename(job.artifactPath);
+  if (artifactBasename) return artifactBasename;
+  // Fallback
+  return '—';
+}
+
 function isTerminalJobStatus(status) {
   const normalized = normalizeJobStatus(status);
   return TERMINAL_JOB_STATUSES.has(normalized);
@@ -1533,7 +1572,7 @@ function render() {
       if (!job) {
         rows.push(`<tr class="is-placeholder" aria-hidden="true">
           <td class="cell-job" aria-label="Empty queue row">—</td>
-          <td class="cell-position">—</td>
+          <td class="cell-pdf-name">—</td>
           <td class="cell-size">—</td>
           <td class="cell-mode">—</td>
           <td class="cell-count">—</td>
@@ -1544,10 +1583,9 @@ function render() {
       }
 
       const meta = getJobMeta(job);
-      const fullJob = `${meta.id} · ${meta.name}`;
+      const displayName = getJobDisplayName(job);
+      const fullJob = `${meta.id} · ${displayName}`;
       const selected = selectedJobId === job.id;
-      const queuePos = queuedJobIds.indexOf(job.id);
-      const queuePosLabel = jobsTab === 'queued' && queuePos >= 0 ? `#${queuePos + 1}` : '—';
       const roleBadges = [];
       if (jobsTab === 'queued' && job.id === activeJobId) roleBadges.push('<span class="job-badge is-active">Active</span>');
       if (jobsTab === 'queued' && job.id === nextUpJobId) roleBadges.push('<span class="job-badge is-next">Next Up</span>');
@@ -1561,7 +1599,7 @@ function render() {
 
       rows.push(`<tr data-job-id="${escapeHtml(job.id)}" tabindex="0" role="button" aria-label="Select job ${escapeHtml(fullJob)}" aria-selected="${selected ? 'true' : 'false'}" class="${selected ? 'is-selected' : ''}">
         <td class="cell-job" title="${escapeHtml(fullJob)}">${escapeHtml(fullJob)}${roleBadgesHtml}</td>
-        <td class="cell-position" title="Queue position">${escapeHtml(queuePosLabel)}</td>
+        <td class="cell-pdf-name" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</td>
         <td class="cell-size" title="${escapeHtml(meta.size)}">${escapeHtml(meta.size)}</td>
         <td class="cell-mode" title="${escapeHtml(meta.mode)}">${escapeHtml(meta.mode)}</td>
         <td class="cell-count" title="${escapeHtml(meta.count)}">${escapeHtml(meta.count)}</td>
