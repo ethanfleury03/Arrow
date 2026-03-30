@@ -32,18 +32,12 @@ const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 const { execFile } = require('node:child_process');
 const { hasSimulatedSignal } = require('./engine-state');
+const { loadPesDefaults } = require('./pes-defaults');
 
 const execFileAsync = promisify(execFile);
 
-function loadArrowPesDefaults() {
-  const env = process.env;
-  return Object.freeze({
-    host: String(env.ARROW_PES_HOST || env.MEMJET_TARGET_HOST || '192.168.111.1').trim(),
-    commandPort: Number(env.ARROW_PES_COMMAND_PORT || env.MEMJET_TARGET_COMMAND_PORT || 13001),
-    eventPort: Number(env.ARROW_PES_EVENT_PORT || env.MEMJET_TARGET_EVENT_PORT || 9231),
-    dataPort: Number(env.ARROW_PES_DATA_PORT || env.MEMJET_TARGET_DATA_PORT || 13001),
-    sshHostKeyFingerprint: String(env.ARROW_PES_SSH_HOST_KEY || '').trim()
-  });
+function loadArrowPesDefaults(env) {
+  return loadPesDefaults(env);
 }
 
 const ARROW_PES = loadArrowPesDefaults();

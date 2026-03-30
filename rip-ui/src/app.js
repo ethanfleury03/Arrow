@@ -48,7 +48,7 @@ const INITIAL_STATE = {
     operatorProfile: 'live-operator',
     backendMode: 'bridge-http',
     host: '127.0.0.1',
-    commandPort: 13002,
+    commandPort: 13001,
     eventPort: 9231,
     dataPort: 13001,
     readOnlyDiscovery: false,

@@ -45,8 +45,9 @@
     "report:config": "node scripts/config-audit.js",
     "test:sqlite": "node tests/sqlite-store.test.js",
     "test:engine-state": "node tests/engine-state.test.js",
+    "test:pes-defaults": "node tests/pes-defaults.test.js",
     "test": "npm run ci",
-    "ci": "npm run lint && npm run smoke && npm run test:harness && npm run test:scenarios && npm run test:bridge && npm run test:bridge:v1 && npm run test:bridge:phase1 && npm run test:backend && npm run test:runtime-config && npm run test:real-client-selection && npm run test:hookup && npm run test:drill && npm run test:submitter && npm run test:submitter:prod && npm run test:submitter:report && npm run test:completion && npm run test:config && npm run test:sqlite && npm run test:engine-state",
+    "ci": "npm run lint && npm run smoke && npm run test:harness && npm run test:scenarios && npm run test:bridge && npm run test:bridge:v1 && npm run test:bridge:phase1 && npm run test:backend && npm run test:runtime-config && npm run test:real-client-selection && npm run test:hookup && npm run test:drill && npm run test:submitter && npm run test:submitter:prod && npm run test:submitter:report && npm run test:completion && npm run test:config && npm run test:sqlite && npm run test:engine-state && npm run test:pes-defaults",
     "ci:reports": "npm run preflight && npm run report:scenarios && npm run release:manifest && npm run report:control && npm run handoff:bundle && npm run test:handoff && npm run report:submitter && npm run report:hookup && npm run test:ops && npm run report:ops && npm run report:config && npm run guard:completion"
   },
   "build": {

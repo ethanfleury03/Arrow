@@ -8,7 +8,7 @@
   "rip": {
     "host": "192.168.111.1",
     "jobDataPort": 13001,
-    "commandPort": 13002,
+    "commandPort": 13001,
     "eventPort": 9231,
     "protocol": "thrift-compact-framed"
   },

@@ -190,6 +190,7 @@ function createBridgeServer(options = {}) {
 
   let statusPollTimer = null;
   let statusPollInFlight = false;
+  let statusPollPromise = null;
   let lastStatusSignature = '';
   let latestRawDeviceStatus = null;
   let latestSystemState = {
@@ -244,8 +245,13 @@ function createBridgeServer(options = {}) {
   }
 
   async function pollSystemState() {
-    if (statusPollInFlight) return;
+    if (statusPollInFlight) return statusPollPromise;
     statusPollInFlight = true;
+    statusPollPromise = _doPoll();
+    return statusPollPromise;
+  }
+
+  async function _doPoll() {
 
     try {
       const status = await manager.refreshDeviceStatus();
@@ -311,6 +317,7 @@ function createBridgeServer(options = {}) {
         error: String(error?.message || error)
       };
 
+      latestRawDeviceStatus = latestRawDeviceStatus || { connected: false, degraded: true, details: {} };
       latestSystemState = fallback;
       const signature = JSON.stringify({ engineState: fallback.engineState, connected: fallback.connected, degraded: fallback.degraded, error: fallback.error });
       if (signature !== lastStatusSignature) {
@@ -569,10 +576,26 @@ function createBridgeServer(options = {}) {
     }
   });
 
+  let inFlightRequests = 0;
+  let shuttingDown = false;
+
+  const origEmit = server.emit.bind(server);
+  server.emit = function (event, ...args) {
+    if (event === 'request') {
+      inFlightRequests++;
+      const res = args[1];
+      const onFinish = () => { inFlightRequests--; };
+      res.on('finish', onFinish);
+      res.on('close', onFinish);
+    }
+    return origEmit(event, ...args);
+  };
+
   return {
     server,
     manager,
     config,
+    get shuttingDown() { return shuttingDown; },
     start() {
       return new Promise(resolve => {
         server.listen(config.port, config.host, () => {
@@ -585,19 +608,52 @@ function createBridgeServer(options = {}) {
         });
       });
     },
-    stop() {
-      return new Promise(resolve => {
-        if (statusPollTimer) clearInterval(statusPollTimer);
-        statusPollTimer = null;
-        server.close(() => resolve());
-      });
+    async stop() {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      logger.info({ msg: 'bridge.shutdown.start', inFlight: inFlightRequests });
+
+      if (statusPollTimer) clearInterval(statusPollTimer);
+      statusPollTimer = null;
+
+      for (const sub of subscribers) {
+        try { sub.end(); } catch {}
+      }
+      subscribers.clear();
+      for (const sub of statusSubscribers) {
+        try { sub.end(); } catch {}
+      }
+      statusSubscribers.clear();
+
+      const drainTimeoutMs = Number(process.env.RIP_BRIDGE_DRAIN_TIMEOUT_MS) || 5000;
+      const deadline = Date.now() + drainTimeoutMs;
+      while (inFlightRequests > 0 && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      if (inFlightRequests > 0) {
+        logger.warn({ msg: 'bridge.shutdown.drain_timeout', remaining: inFlightRequests });
+      }
+
+      await new Promise(resolve => server.close(() => resolve()));
+
+      try { store?.close(); } catch {}
+      logger.info({ msg: 'bridge.shutdown.complete' });
     }
   };
 }
 
 if (require.main === module) {
   const bridge = createBridgeServer();
-  bridge.start();
+  bridge.start().then(() => {
+    const shutdown = async (signal) => {
+      bridge.config._logger?.info?.({ msg: 'bridge.signal', signal }) ||
+        console.log(`[bridge] received ${signal}, shutting down`);
+      await bridge.stop();
+      process.exit(0);
+    };
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+  });
 }
 
 module.exports = { createBridgeServer };
