@@ -142,7 +142,7 @@ if level not in service_map:
 
 client = KPesClient(host=host)
 client.open_connection()
-client.startServicing([service_map[level]])
+client.startServicing([], service_map[level])
 
 print(json.dumps({
  'ok': True,

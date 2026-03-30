@@ -12,7 +12,7 @@ for (const file of [PESCTL, READY]) {
   const src = fs.readFileSync(file, 'utf8');
   assert.match(
     src,
-    /client\.startServicing\(\[service_map\[level\]\]\)/,
+    /client\.startServicing\(\[\],\s*service_map\[level\]\)/,
     `${path.basename(file)} should pass a list arg to startServicing to avoid runtime script failures`
   );
 }
