@@ -30,6 +30,17 @@ const ALLOWED_COMMANDS = new Set([
   'shutdown'
 ]);
 
+const JobStatus = {
+  UNKNOWN: 'UNKNOWN',
+  QUEUED: 'QUEUED',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
+  DEGRADED_COMPLETED: 'DEGRADED_COMPLETED',
+  FAILED: 'FAILED',
+  ABORTED: 'ABORTED',
+  CANCELED: 'CANCELED',
+};
+
 class RipBackendError extends Error {
   constructor(code, message, details = {}) {
     super(message);
@@ -659,5 +670,6 @@ function createRipBackend({ mode = process.env.RIP_BACKEND_MODE || 'bridge-http'
 
 module.exports = {
   RipBackendError,
-  createRipBackend
+  createRipBackend,
+  JobStatus
 };
