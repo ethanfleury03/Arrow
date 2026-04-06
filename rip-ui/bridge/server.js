@@ -616,6 +616,32 @@ function createBridgeServer(options = {}) {
         return json(res, 201, job);
       }
 
+      // Board composition job - proxies to Python FastAPI adapter
+      // Accepts: { board_width_inches, board_height_inches, placements: [{pdf_path, x_inches, y_inches, scale, rotation_degrees, page_number}], args, env }
+      if (req.method === 'POST' && url.pathname === '/api/jobs/board') {
+        const adapterUrl = process.env.RIP_ADAPTER_URL || 'http://localhost:8080';
+        const boardPayload = await parseBody(req);
+
+        try {
+          const adapterRes = await fetch(`${adapterUrl}/jobs/board`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(boardPayload)
+          });
+
+          if (!adapterRes.ok) {
+            const errBody = await adapterRes.text();
+            return json(res, adapterRes.status, { error: 'adapter_error', detail: errBody });
+          }
+
+          const result = await adapterRes.json();
+          return json(res, 202, result);
+        } catch (err) {
+          logger.error({ msg: 'bridge.boardJob.proxyFailed', error: err.message });
+          return json(res, 502, { error: 'bad_gateway', message: `Failed to reach adapter: ${err.message}` });
+        }
+      }
+
       // List all persisted jobs (read-only endpoint for hydration)
       if (req.method === 'GET' && url.pathname === '/api/jobs') {
         const store = manager.getStore?.();
