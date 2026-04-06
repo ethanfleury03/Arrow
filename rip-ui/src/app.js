@@ -159,6 +159,14 @@ let renderTick = 0;
 let layoutPreviewImage = null;
 let layoutPreviewImageSrc = '';
 const JOB_NUMERIC_EDITING_IDS = new Set();
+
+// Board composition: which placement index is currently selected (-1 = none)
+let boardSelectedIndex = -1;
+
+// Board composition: drag state
+let boardDrag = { active: false, type: null, startX: 0, startY: 0, startMx: 0, startMy: 0, placementStart: null };
+// type: 'move' | 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+const HANDLE_SIZE = 8;
 const MIN_VISIBLE_QUEUE_ROWS = 12;
 const MIN_VISIBLE_PAST_ROWS = 8;
 
@@ -669,11 +677,13 @@ function toggleBoardMode() {
   }
   renderLayoutPreview();
   renderLayoutRuler();
+  if (!state.artwork.boardMode) boardSelectedIndex = -1;
   persistState();
 }
 
 function addPdfToBoard(file) {
   if (!file) return;
+  const idx = (state.artwork.board.placements || []).length;
   const placements = state.artwork.board.placements || [];
   placements.push({
     pdfPath: file.path || file.name,
@@ -682,18 +692,39 @@ function addPdfToBoard(file) {
     yInches: 0.5,
     scale: 1,
     rotation: 0,
-    pageNumber: 0
+    pageNumber: 0,
+    previewDataUrl: '',
+    pageWidthPt: 612,
+    pageHeightPt: 792
   });
   state.artwork.board.placements = placements;
+  boardSelectedIndex = idx;
   renderBoardPdfList();
   renderLayoutPreview();
   persistState();
+
+  // Load the PDF preview asynchronously
+  const reader = new FileReader();
+  reader.onload = async function(ev) {
+    const arrayBuffer = ev.target.result;
+    const dataUrl = await renderBoardPdfPage(arrayBuffer, file.name);
+    if (dataUrl && state.artwork.board.placements[idx]) {
+      state.artwork.board.placements[idx].previewDataUrl = dataUrl;
+      state.artwork.board.placements[idx].pageWidthPt = boardPdfImageCache[idx] ? boardPdfImageCache[idx].naturalWidth : 612;
+      state.artwork.board.placements[idx].pageHeightPt = boardPdfImageCache[idx] ? boardPdfImageCache[idx].naturalHeight : 792;
+      renderLayoutPreview();
+      persistState();
+    }
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 function removePdfFromBoard(index) {
   const placements = state.artwork.board.placements || [];
   placements.splice(index, 1);
   state.artwork.board.placements = placements;
+  if (boardSelectedIndex >= placements.length) boardSelectedIndex = placements.length - 1;
+  if (boardSelectedIndex < 0) boardSelectedIndex = -1;
   renderBoardPdfList();
   renderLayoutPreview();
   persistState();
@@ -1017,7 +1048,6 @@ function renderBoardPreview(ctx, cw, ch) {
   const boardWMm = boardWIn * 25.4;
   const boardHMm = boardHIn * 25.4;
 
-  // Scale board to fill canvas like the normal preview does
   const pad = 0;
   const availW = cw - pad * 2;
   const availH = ch - pad * 2;
@@ -1028,26 +1058,45 @@ function renderBoardPreview(ctx, cw, ch) {
   const boardX = (cw - boardPxW) / 2;
   const boardY = (ch - boardPxH) / 2;
 
-  // Full canvas grid background (same as normal preview)
+  // Store board geometry for hit testing in mouse handlers
+  window.__boardGeom = { boardX, boardY, boardPxW, boardPxH, mmToPx, cw, ch };
+
+  // Background
   ctx.fillStyle = '#f7f8fa';
   ctx.fillRect(0, 0, cw, ch);
 
+  // Clip everything to board area
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(boardX, boardY, boardPxW, boardPxH);
+  ctx.clip();
+
+  // Grid within board area
   const gridSize = 20;
   ctx.strokeStyle = 'rgba(0,0,0,0.08)';
   ctx.lineWidth = 1;
-  for (let gx = 0; gx <= cw; gx += gridSize) { ctx.beginPath(); ctx.moveTo(gx + 0.5, 0); ctx.lineTo(gx + 0.5, ch); ctx.stroke(); }
-  for (let gy = 0; gy <= ch; gy += gridSize) { ctx.beginPath(); ctx.moveTo(0, gy + 0.5); ctx.lineTo(cw, gy + 0.5); ctx.stroke(); }
+  const gStartX = Math.floor(boardX / gridSize) * gridSize;
+  const gEndX = boardX + boardPxW;
+  const gStartY = Math.floor(boardY / gridSize) * gridSize;
+  const gEndY = boardY + boardPxH;
+  for (let gx = gStartX; gx <= gEndX; gx += gridSize) { ctx.beginPath(); ctx.moveTo(gx + 0.5, boardY); ctx.lineTo(gx + 0.5, boardY + boardPxH); ctx.stroke(); }
+  for (let gy = gStartY; gy <= gEndY; gy += gridSize) { ctx.beginPath(); ctx.moveTo(boardX, gy + 0.5); ctx.lineTo(boardX + boardPxW, gy + 0.5); ctx.stroke(); }
 
-  // Draw PDFs directly on the grid (no white board box)
-  const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+  // Draw each PDF placement
   const placements = board.placements || [];
+  const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
   placements.forEach(function(p, i) {
     const xIn = p.xInches || 0;
     const yIn = p.yInches || 0;
     const scale = p.scale || 1;
     const rotation = (p.rotation || 0) * Math.PI / 180;
-    const pdfWMm = 8.5 * 25.4 * scale;
-    const pdfHMm = 11 * 25.4 * scale;
+
+    // PDF dimensions: use stored page size or default Letter
+    const pdfWPt = p.pageWidthPt || 612;
+    const pdfHPt = p.pageHeightPt || 792;
+    const pdfWMm = (pdfWPt / 72) * 25.4 * scale;
+    const pdfHMm = (pdfHPt / 72) * 25.4 * scale;
+
     const px = boardX + xIn * 25.4 * mmToPx;
     const py = boardY + yIn * 25.4 * mmToPx;
     const pw = pdfWMm * mmToPx;
@@ -1057,19 +1106,92 @@ function renderBoardPreview(ctx, cw, ch) {
     ctx.save();
     ctx.translate(px + pw / 2, py + ph / 2);
     ctx.rotate(rotation);
-    ctx.fillStyle = color + '33';
-    ctx.fillRect(-pw / 2, -ph / 2, pw, ph);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(-pw / 2, -ph / 2, pw, ph);
-    ctx.fillStyle = color;
-    ctx.font = 'bold 10px system-ui, sans-serif';
+
+    if (p.previewDataUrl) {
+      const img = new Image();
+      img.src = p.previewDataUrl;
+      if (img.complete) {
+        ctx.drawImage(img, -pw / 2, -ph / 2, pw, ph);
+      } else {
+        // Placeholder while loading
+        ctx.fillStyle = color + '22';
+        ctx.fillRect(-pw / 2, -ph / 2, pw, ph);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(-pw / 2, -ph / 2, pw, ph);
+        ctx.setLineDash([]);
+      }
+    } else {
+      // No preview yet - colored placeholder
+      ctx.fillStyle = color + '22';
+      ctx.fillRect(-pw / 2, -ph / 2, pw, ph);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(-pw / 2, -ph / 2, pw, ph);
+      ctx.setLineDash([]);
+    }
+
+    // Filename label at bottom of PDF
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(-pw / 2, ph / 2 - 14, pw, 14);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '9px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    var label = (p.fileName || 'PDF ' + (i + 1)).substring(0, 12);
-    ctx.fillText(label, 0, 0);
+    ctx.fillText((p.fileName || 'PDF ' + (i + 1)).substring(0, 16), 0, ph / 2 - 7);
+
     ctx.restore();
   });
+
+  ctx.restore(); // end clip
+
+  // Selection highlight and handles for selected placement
+  if (boardSelectedIndex >= 0 && placements[boardSelectedIndex]) {
+    const p = placements[boardSelectedIndex];
+    const xIn = p.xInches || 0;
+    const yIn = p.yInches || 0;
+    const scale = p.scale || 1;
+    const rotation = (p.rotation || 0) * Math.PI / 180;
+    const pdfWPt = p.pageWidthPt || 612;
+    const pdfHPt = p.pageHeightPt || 792;
+    const pdfWMm = (pdfWPt / 72) * 25.4 * scale;
+    const pdfHMm = (pdfHPt / 72) * 25.4 * scale;
+    const px = boardX + xIn * 25.4 * mmToPx;
+    const py = boardY + yIn * 25.4 * mmToPx;
+    const pw = pdfWMm * mmToPx;
+    const ph = pdfHMm * mmToPx;
+    const color = colors[boardSelectedIndex % colors.length];
+
+    ctx.save();
+    ctx.translate(px + pw / 2, py + ph / 2);
+    ctx.rotate(rotation);
+
+    // Selection border
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 3]);
+    ctx.strokeRect(-pw / 2, -ph / 2, pw, ph);
+    ctx.setLineDash([]);
+
+    // Corner handles
+    const handles = [
+      { x: -pw / 2, y: -ph / 2, cursor: 'nw', name: 'nw' },
+      { x: pw / 2, y: -ph / 2, cursor: 'ne', name: 'ne' },
+      { x: pw / 2, y: ph / 2, cursor: 'se', name: 'se' },
+      { x: -pw / 2, y: ph / 2, cursor: 'sw', name: 'sw' }
+    ];
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    handles.forEach(function(h) {
+      ctx.fillRect(h.x - HANDLE_SIZE / 2, h.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+      ctx.strokeRect(h.x - HANDLE_SIZE / 2, h.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+    });
+
+    ctx.restore();
+  }
 
   if (placements.length === 0) {
     ctx.fillStyle = '#94a3b8';
@@ -1078,6 +1200,235 @@ function renderBoardPreview(ctx, cw, ch) {
     ctx.textBaseline = 'middle';
     ctx.fillText('Click "+ Add PDF" to place artwork on the board', cw / 2, ch / 2);
   }
+}
+
+// Returns { type: 'handle'|'body'|'outside', index, handleName, canvasX, canvasY } or null
+function getBoardHitInfo(canvasX, canvasY) {
+  const geom = window.__boardGeom;
+  if (!geom) return null;
+  const { boardX, boardY, boardPxW, boardPxH, mmToPx, cw, ch } = geom;
+  const placements = state.artwork.board?.placements || [];
+
+  if (boardSelectedIndex >= 0 && placements[boardSelectedIndex]) {
+    const p = placements[boardSelectedIndex];
+    const xIn = p.xInches || 0;
+    const yIn = p.yInches || 0;
+    const scale = p.scale || 1;
+    const pdfWPt = p.pageWidthPt || 612;
+    const pdfHPt = p.pageHeightPt || 792;
+    const pdfWMm = (pdfWPt / 72) * 25.4 * scale;
+    const pdfHMm = (pdfHPt / 72) * 25.4 * scale;
+    const px = boardX + xIn * 25.4 * mmToPx;
+    const py = boardY + yIn * 25.4 * mmToPx;
+    const pw = pdfWMm * mmToPx;
+    const ph = pdfHMm * mmToPx;
+    const hs = HANDLE_SIZE;
+
+    // Check corner handles first (in board-space, before rotation)
+    const handles = [
+      { name: 'nw', x: px, y: py },
+      { name: 'ne', x: px + pw, y: py },
+      { name: 'se', x: px + pw, y: py + ph },
+      { name: 'sw', x: px, y: py + ph }
+    ];
+    for (const h of handles) {
+      if (Math.abs(canvasX - h.x) <= hs && Math.abs(canvasY - h.y) <= hs) {
+        return { type: 'handle', index: boardSelectedIndex, handleName: h.name };
+      }
+    }
+
+    // Check body (PDF area) - rough bounding box for now
+    if (canvasX >= px && canvasX <= px + pw && canvasY >= py && canvasY <= py + ph) {
+      return { type: 'body', index: boardSelectedIndex };
+    }
+  }
+
+  // Check all placements from top to bottom
+  for (let i = placements.length - 1; i >= 0; i--) {
+    const p = placements[i];
+    const xIn = p.xInches || 0;
+    const yIn = p.yInches || 0;
+    const scale = p.scale || 1;
+    const pdfWPt = p.pageWidthPt || 612;
+    const pdfHPt = p.pageHeightPt || 792;
+    const pdfWMm = (pdfWPt / 72) * 25.4 * scale;
+    const pdfHMm = (pdfHPt / 72) * 25.4 * scale;
+    const px = boardX + xIn * 25.4 * mmToPx;
+    const py = boardY + yIn * 25.4 * mmToPx;
+    const pw = pdfWMm * mmToPx;
+    const ph = pdfHMm * mmToPx;
+
+    if (canvasX >= px && canvasX <= px + pw && canvasY >= py && canvasY <= py + ph) {
+      return { type: 'body', index: i };
+    }
+  }
+
+  // Check if outside board area
+  if (canvasX < boardX || canvasX > boardX + boardPxW || canvasY < boardY || canvasY > boardY + boardPxH) {
+    return { type: 'outside' };
+  }
+
+  return null;
+}
+
+function onBoardClick(e) {
+  if (!state.artwork.boardMode) return;
+  const canvas = document.getElementById('layoutCanvas');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const cx = (e.clientX - rect.left) * scaleX;
+  const cy = (e.clientY - rect.top) * scaleY;
+  const hit = getBoardHitInfo(cx, cy);
+  if (hit && hit.type === 'body') {
+    boardSelectedIndex = hit.index;
+    renderLayoutPreview();
+  } else if (hit && hit.type === 'outside') {
+    boardSelectedIndex = -1;
+    renderLayoutPreview();
+  }
+}
+
+function onBoardMouseDown(e) {
+  if (!state.artwork.boardMode) return;
+  if (e.button !== 0) return;
+  const canvas = document.getElementById('layoutCanvas');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const cx = (e.clientX - rect.left) * scaleX;
+  const cy = (e.clientY - rect.top) * scaleY;
+  const hit = getBoardHitInfo(cx, cy);
+  if (!hit) return;
+
+  e.preventDefault();
+  boardSelectedIndex = hit.index;
+
+  if (hit.type === 'handle') {
+    boardDrag.active = true;
+    boardDrag.type = hit.handleName;
+    boardDrag.startMx = cx;
+    boardDrag.startMy = cy;
+    const p = state.artwork.board.placements[hit.index];
+    boardDrag.placementStart = {
+      xInches: p.xInches || 0,
+      yInches: p.yInches || 0,
+      scale: p.scale || 1
+    };
+    canvas.style.cursor = hit.handleName + '-resize';
+  } else if (hit.type === 'body') {
+    boardDrag.active = true;
+    boardDrag.type = 'move';
+    boardDrag.startMx = cx;
+    boardDrag.startMy = cy;
+    const p = state.artwork.board.placements[hit.index];
+    boardDrag.placementStart = {
+      xInches: p.xInches || 0,
+      yInches: p.yInches || 0
+    };
+    canvas.style.cursor = 'grabbing';
+  }
+  renderLayoutPreview();
+}
+
+function onBoardMouseMove(e) {
+  if (!state.artwork.boardMode) return;
+  const canvas = document.getElementById('layoutCanvas');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const cx = (e.clientX - rect.left) * scaleX;
+  const cy = (e.clientY - rect.top) * scaleY;
+
+  if (!boardDrag.active) {
+    // Update cursor based on what's under the mouse
+    const hit = getBoardHitInfo(cx, cy);
+    if (hit && hit.type === 'handle') {
+      canvas.style.cursor = hit.handleName + '-resize';
+    } else if (hit && hit.type === 'body') {
+      canvas.style.cursor = 'grab';
+    } else {
+      canvas.style.cursor = 'default';
+    }
+    return;
+  }
+
+  const geom = window.__boardGeom;
+  if (!geom) return;
+  const { mmToPx } = geom;
+  const dxPx = cx - boardDrag.startMx;
+  const dyPx = cy - boardDrag.startMy;
+  const dxIn = dxPx / (mmToPx * 25.4);
+  const dyIn = dyPx / (mmToPx * 25.4);
+  const idx = boardSelectedIndex;
+  const p = state.artwork.board.placements[idx];
+  if (!p) return;
+
+  if (boardDrag.type === 'move') {
+    p.xInches = boardDrag.placementStart.xInches + dxIn;
+    p.yInches = boardDrag.placementStart.yInches + dyIn;
+  } else if (boardDrag.type === 'se') {
+    // SE handle: scale proportionally from NW corner
+    const origScale = boardDrag.placementStart.scale || 1;
+    const origX = boardDrag.placementStart.xInches || 0;
+    const origY = boardDrag.placementStart.yInches || 0;
+    const origW = ((p.pageWidthPt || 612) / 72) * 25.4 * origScale;
+    const origH = ((p.pageHeightPt || 792) / 72) * 25.4 * origScale;
+    if (origW > 1) {
+      const newW = origW + dxPx / mmToPx;
+      const newScale = Math.max(0.05, origScale * (newW / origW));
+      p.scale = newScale;
+    }
+  } else if (boardDrag.type === 'nw') {
+    // NW handle: scale from SE corner, also adjust position
+    const origScale = boardDrag.placementStart.scale || 1;
+    const origX = boardDrag.placementStart.xInches || 0;
+    const origY = boardDrag.placementStart.yInches || 0;
+    const origW = ((p.pageWidthPt || 612) / 72) * 25.4 * origScale;
+    const origH = ((p.pageHeightPt || 792) / 72) * 25.4 * origScale;
+    if (origW > 1) {
+      const newW = origW - dxPx / mmToPx;
+      const newScale = Math.max(0.05, origScale * (newW / origW));
+      p.scale = newScale;
+      p.xInches = origX + dxIn;
+      p.yInches = origY + dyIn;
+    }
+  } else if (boardDrag.type === 'ne') {
+    const origScale = boardDrag.placementStart.scale || 1;
+    const origW = ((p.pageWidthPt || 612) / 72) * 25.4 * origScale;
+    if (origW > 1) {
+      const newW = origW + dxPx / mmToPx;
+      const newScale = Math.max(0.05, origScale * (newW / origW));
+      p.scale = newScale;
+      p.yInches = boardDrag.placementStart.yInches + dyIn;
+    }
+  } else if (boardDrag.type === 'sw') {
+    const origScale = boardDrag.placementStart.scale || 1;
+    const origW = ((p.pageWidthPt || 612) / 72) * 25.4 * origScale;
+    if (origW > 1) {
+      const newW = origW - dxPx / mmToPx;
+      const newScale = Math.max(0.05, origScale * (newW / origW));
+      p.scale = newScale;
+      p.xInches = boardDrag.placementStart.xInches + dxIn;
+    }
+  }
+  renderLayoutPreview();
+}
+
+function onBoardMouseUp(e) {
+  if (!boardDrag.active) return;
+  const canvas = document.getElementById('layoutCanvas');
+  if (canvas) canvas.style.cursor = 'default';
+  if (boardDrag.type) {
+    persistState();
+    renderBoardPdfList();
+  }
+  boardDrag.active = false;
+  boardDrag.type = null;
+  boardDrag.placementStart = null;
 }
 
 function updatePlacementInputs() {
@@ -2597,6 +2948,44 @@ async function renderPdfFirstPage(arrayBuffer, fileName) {
     persistState();
   } catch (error) {
     log(`PDF load failed (deterministic safe fallback): ${error.message}`);
+  }
+}
+
+// Renders the first page of a board PDF and caches the Image object.
+// Returns a Promise that resolves to the data URL.
+async function renderBoardPdfPage(arrayBuffer, fileName) {
+  const hasPdfJs = typeof window !== 'undefined' && window.pdfjsLib;
+  if (!hasPdfJs) return null;
+  try {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.js';
+    const loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    const page = await pdf.getPage(1);
+    const viewport = page.getViewport({ scale: 1.0 });
+
+    // Render at 2x for crisp display on high-DPI screens
+    const targetPx = Math.max(viewport.width, 400);
+    const scale = targetPx / viewport.width;
+    const vp = page.getViewport({ scale: scale });
+    const canv = document.createElement('canvas');
+    canv.width = Math.ceil(vp.width);
+    canv.height = Math.ceil(vp.height);
+    const c = canv.getContext('2d');
+    if (!c) return null;
+    c.imageSmoothingEnabled = true;
+    c.imageSmoothingQuality = 'high';
+    await page.render({ canvasContext: c, viewport: vp }).promise;
+    const dataUrl = canv.toDataURL('image/png');
+
+    // Pre-load into an Image for canvas drawing
+    const img = new Image();
+    img.src = dataUrl;
+    // Cache by 'latest' key; caller copies it to the right slot
+    boardPdfImageCache['latest'] = img;
+    return dataUrl;
+  } catch (err) {
+    log('Board PDF render failed: ' + err.message);
+    return null;
   }
 }
 
@@ -5182,6 +5571,17 @@ function bindBoardControls() {
   }
 
   if (state.artwork.boardMode) renderBoardPdfList();
+
+  // Mouse interaction for board canvas (only in board mode)
+  const boardCanvas = document.getElementById('layoutCanvas');
+  if (boardCanvas) {
+    boardCanvas.style.cursor = 'default';
+    boardCanvas.onclick = onBoardClick;
+    boardCanvas.onmousedown = onBoardMouseDown;
+    boardCanvas.onmousemove = onBoardMouseMove;
+    boardCanvas.onmouseup = onBoardMouseUp;
+    boardCanvas.onmouseleave = onBoardMouseUp;
+  }
 }
 
 function bindPdfInputs() {
