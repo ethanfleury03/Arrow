@@ -254,7 +254,10 @@ console.info = () => {};
 // ── Load app.js via window.eval() ─────────────────────────────────────────
 // window.eval() runs in jsdom's V8 context, making all top-level
 // function declarations become window properties (just like a browser <script>).
-window.eval(appJsSource);
+// We append a capture snippet so module-level `let` bindings become accessible.
+// Note: each window.eval() is a separate scope — let bindings from one eval
+// are NOT visible in a subsequent eval call, so capture must be in the SAME call.
+window.eval(appJsSource + '\nif (typeof state !== "undefined") window.__appState = state;\nif (typeof boardSelectedIndex !== "undefined") window.__boardSelectedIndex = boardSelectedIndex;\nif (typeof boardSelectedIndex !== "undefined") {\n  Object.defineProperty(window, "__boardSelectedIndex", {\n    get: function() { return boardSelectedIndex; },\n    set: function(v) { boardSelectedIndex = v; },\n    configurable: true, enumerable: true\n  });\n}');
 
 // Restore console
 console.log = _realLog;
@@ -263,5 +266,9 @@ console.log = _realLog;
 for (const key of Object.keys(window)) {
   try { if (!(key in global)) global[key] = window[key]; } catch (_) { /* skip */ }
 }
+
+// Re-export the captured `let` bindings (state, boardSelectedIndex) from the eval.
+global.state = window.__appState;
+global.boardSelectedIndex = window.__boardSelectedIndex;
 
 module.exports = { window, document, dom };
