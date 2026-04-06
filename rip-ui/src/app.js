@@ -1017,7 +1017,8 @@ function renderBoardPreview(ctx, cw, ch) {
   const boardWMm = boardWIn * 25.4;
   const boardHMm = boardHIn * 25.4;
 
-  const pad = 40;
+  // Scale board to fill canvas like the normal preview does
+  const pad = 0;
   const availW = cw - pad * 2;
   const availH = ch - pad * 2;
   const mmToPx = Math.min(availW / boardWMm, availH / boardHMm);
@@ -1027,38 +1028,17 @@ function renderBoardPreview(ctx, cw, ch) {
   const boardX = (cw - boardPxW) / 2;
   const boardY = (ch - boardPxH) / 2;
 
-  ctx.fillStyle = '#f0f4f8';
+  // Full canvas grid background (same as normal preview)
+  ctx.fillStyle = '#f7f8fa';
   ctx.fillRect(0, 0, cw, ch);
 
   const gridSize = 20;
-  ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+  ctx.strokeStyle = 'rgba(0,0,0,0.08)';
   ctx.lineWidth = 1;
   for (let gx = 0; gx <= cw; gx += gridSize) { ctx.beginPath(); ctx.moveTo(gx + 0.5, 0); ctx.lineTo(gx + 0.5, ch); ctx.stroke(); }
   for (let gy = 0; gy <= ch; gy += gridSize) { ctx.beginPath(); ctx.moveTo(0, gy + 0.5); ctx.lineTo(cw, gy + 0.5); ctx.stroke(); }
 
-  ctx.shadowColor = 'rgba(0,0,0,0.15)';
-  ctx.shadowBlur = 12;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 4;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(boardX, boardY, boardPxW, boardPxH);
-
-  ctx.shadowColor = 'transparent';
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = '#c7d2fe';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(boardX, boardY, boardPxW, boardPxH);
-
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = '11px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(boardWIn + '" W', boardX + boardPxW / 2, boardY - 6);
-  ctx.save();
-  ctx.translate(boardX - 6, boardY + boardPxH / 2);
-  ctx.rotate(-Math.PI / 2);
-  ctx.fillText(boardHIn + '" H', 0, 0);
-  ctx.restore();
-
+  // Draw PDFs directly on the grid (no white board box)
   const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
   const placements = board.placements || [];
   placements.forEach(function(p, i) {
