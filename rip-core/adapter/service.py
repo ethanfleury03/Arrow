@@ -4,15 +4,18 @@ import json
 import os
 import shlex
 import subprocess
+import tempfile
 import threading
 import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
+
+from board_compositor import BoardCompositor, PDFPlacement, composite_board_job
 
 
 MAX_LOG_TAIL = 200
@@ -35,6 +38,32 @@ class JobRequest(BaseModel):
         if not Path(value).exists():
             raise ValueError(f"input_path does not exist: {value}")
         return value
+
+
+class PDFPlacementRequest(BaseModel):
+    """A PDF placed on the board."""
+    pdf_path: str = Field(..., min_length=1)
+    x_inches: float = Field(default=0.0, ge=0)
+    y_inches: float = Field(default=0.0, ge=0)
+    scale: float = Field(default=1.0, gt=0, le=10)
+    rotation_degrees: float = Field(default=0.0, ge=-360, le=360)
+    page_number: int = Field(default=0, ge=0)  # 0 = all pages
+
+    @field_validator("pdf_path")
+    @classmethod
+    def _path_exists(cls, value: str) -> str:
+        if not Path(value).exists():
+            raise ValueError(f"pdf_path does not exist: {value}")
+        return value
+
+
+class BoardJobRequest(BaseModel):
+    """A board composition job - multiple PDFs on a single board."""
+    board_width_inches: float = Field(..., gt=0, le=100)
+    board_height_inches: float = Field(..., gt=0, le=100)
+    placements: List[PDFPlacementRequest] = Field(..., min_length=1)
+    args: List[str] = Field(default_factory=list)
+    env: Dict[str, str] = Field(default_factory=dict)
 
 
 class JobState(BaseModel):
@@ -220,6 +249,85 @@ def start_job(job_id: str, payload: JobRequest) -> List[str]:
 @app.get("/health")
 def health() -> Dict[str, Any]:
     return {"ok": True, "service": "rip-adapter", "time": _utc_now()}
+
+
+@app.post("/jobs/board", status_code=202)
+def submit_board_job(request: BoardJobRequest) -> Dict[str, Any]:
+    """
+    Submit a board composition job.
+
+    Multiple PDFs are composited onto a single board page before RIP processing.
+    This mimics commercial RIP "board" or "page" workflow.
+
+    The board is defined by width x height in inches. Each PDF is placed at
+    specified x,y coordinates with optional scale and rotation.
+    """
+    job_id = str(uuid.uuid4())
+    now = _utc_now()
+
+    # Build the composite PDF
+    placement_dicts = [
+        {
+            "pdf_path": p.pdf_path,
+            "x_inches": p.x_inches,
+            "y_inches": p.y_inches,
+            "scale": p.scale,
+            "rotation_degrees": p.rotation_degrees,
+            "page_number": p.page_number
+        }
+        for p in request.placements
+    ]
+
+    try:
+        # Create composite PDF
+        composite_path = composite_board_job(
+            board_width_inches=request.board_width_inches,
+            board_height_inches=request.board_height_inches,
+            placements=placement_dicts
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Board composition failed: {exc}") from exc
+
+    # Create a JobRequest from the composite
+    job_request = JobRequest(
+        input_path=composite_path,
+        args=request.args,
+        env=request.env
+    )
+
+    entry = {
+        "id": job_id,
+        "status": "queued",
+        "created_at": now,
+        "updated_at": now,
+        "payload": {
+            "type": "board",
+            "board_width_inches": request.board_width_inches,
+            "board_height_inches": request.board_height_inches,
+            "placements": [p.model_dump() for p in request.placements],
+            "composite_path": composite_path,
+            "args": request.args,
+        },
+        "events": [],
+        "logs_tail": deque(maxlen=MAX_LOG_TAIL),
+        "exit_code": None,
+        "error_code": None,
+    }
+    with _lock:
+        _jobs[job_id] = entry
+
+    try:
+        command = start_job(job_id, job_request)
+    except Exception as exc:
+        with _lock:
+            job = _jobs[job_id]
+            job["status"] = "failed"
+            job["updated_at"] = _utc_now()
+            job["error_code"] = "RIP_RUNTIME_EXCEPTION"
+            job["events"].append({"event": "rip.failed", "error_code": "RIP_RUNTIME_EXCEPTION", "message": str(exc)})
+        raise HTTPException(status_code=500, detail="Failed to launch RIP process") from exc
+
+    return {"id": job_id, "status": "queued", "command": command, "composite_path": composite_path}
 
 
 @app.post("/jobs", status_code=202)
