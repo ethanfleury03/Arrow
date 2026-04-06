@@ -225,30 +225,14 @@
                   <label class="toggle-label">
                     <input type="checkbox" id="chkBoardMode" />
                     <span class="toggle-switch"></span>
-                    <span class="toggle-text">Board Composition Mode</span>
+                    <span class="toggle-text">Board Composition</span>
                   </label>
                 </div>
 
-                <!-- Board Composition Panel (hidden by default) -->
-                <section id="boardCompositionPanel" class="board-composition-panel" hidden>
-                  <div class="board-dimensions-row">
-                    <div class="board-dim-input">
-                      <label for="boardWidthInches">Board Width (in)</label>
-                      <input type="number" id="boardWidthInches" value="8.5" min="1" max="100" step="0.1" />
-                    </div>
-                    <div class="board-dim-input">
-                      <label for="boardHeightInches">Board Height (in)</label>
-                      <input type="number" id="boardHeightInches" value="11" min="1" max="100" step="0.1" />
-                    </div>
-                    <button id="btnAddPdfToBoard" type="button" class="btn-add-pdf-board">+ Add PDF to Board</button>
-                  </div>
-
+                <!-- Board PDF List (shown in sidebar when board mode active) -->
+                <section id="boardCompositionPanel">
                   <div id="boardPdfList" class="board-pdf-list">
                     <!-- Board placement items rendered by JS -->
-                  </div>
-
-                  <div id="boardPreviewCanvas" class="board-preview-mini">
-                    <p class="board-preview-hint">Board preview will appear here</p>
                   </div>
                 </section>
 
@@ -293,6 +277,17 @@
                   </button>
                 </div>
               </div>
+
+              <!-- Board Composition Toolbar (visible when board mode is ON) -->
+              <div class="board-toolbar" id="boardToolbar">
+                <div class="board-toolbar-dims">
+                  <label>W <input type="number" id="boardWidthInches" value="8.5" min="1" max="100" step="0.1" /><span> in</span></label>
+                  <label>H <input type="number" id="boardHeightInches" value="11" min="1" max="100" step="0.1" /><span> in</span></label>
+                </div>
+                <span class="board-toolbar-label">|</span>
+                <button id="btnAddPdfToBoard" type="button" class="btn-add-pdf-board">+ Add PDF</button>
+              </div>
+
               <canvas id="layoutRulerCanvas" width="920" height="56" aria-label="Top horizontal ruler showing media width in inches"></canvas>
               <canvas id="layoutCanvas" width="920" height="520" aria-label="Media sheet and artwork placement preview"></canvas>
               <div class="hint">Full sheet grid baseline · Hatched lower area = non-print/cutoff · Red highlight = placed artwork · Ruler unit: in</div>
