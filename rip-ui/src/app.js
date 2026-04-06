@@ -109,6 +109,12 @@ const INITIAL_STATE = {
       orientation: 'portrait',
       flipHorizontal: false,
       flipVertical: false
+    },
+    boardMode: false,
+    board: {
+      widthInches: 8.5,
+      heightInches: 11,
+      placements: []
     }
   },
   preflight: {
@@ -422,7 +428,11 @@ function loadState() {
       artwork: {
         ...INITIAL_STATE.artwork,
         ...parsedArtwork,
-        placement: mergePlacement(parsedArtwork.placement)
+        placement: mergePlacement(parsedArtwork.placement),
+        board: {
+          ...INITIAL_STATE.artwork.board,
+          ...(parsedArtwork.board || {})
+        }
       }
     };
   } catch {
@@ -554,6 +564,45 @@ function runPreflightChecks() {
 async function submitDataPlaneJob() {
   const bridge = getBridge();
   const jobId = generateJobId();
+
+  if (state.artwork.boardMode && state.artwork.board.placements.length > 0) {
+    const boardPayload = {
+      board_width_inches: state.artwork.board.widthInches,
+      board_height_inches: state.artwork.board.heightInches,
+      placements: state.artwork.board.placements.map(p => ({
+        pdf_path: p.pdfPath,
+        x_inches: p.xInches,
+        y_inches: p.yInches,
+        scale: p.scale || 1,
+        rotation_degrees: p.rotation || 0,
+        page_number: p.pageNumber || 0
+      })),
+      args: [],
+      env: {}
+    };
+    try {
+      const apiRes = await fetch('/api/jobs/board', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(boardPayload)
+      });
+      const result = await apiRes.json();
+      state.submission.lastJobId = result.id || jobId;
+      state.submission.lastResult = apiRes.ok ? 'SUBMITTED (Board)' : `REJECTED: ${result.error || result.detail || 'Unknown'}`;
+      log(`Board composition job ${apiRes.ok ? 'submitted' : 'rejected'}: ${state.submission.lastJobId}`);
+      await appendAudit({ type: 'submit-board-job', payload: boardPayload, result });
+    } catch (err) {
+      const actionable = getActionableError(err);
+      state.submission.lastJobId = jobId;
+      state.submission.lastResult = `ERROR: ${actionable}`;
+      log(`Board submission error: ${actionable}`);
+      await appendAudit({ type: 'submit-board-job', payload: boardPayload, error: actionable });
+    }
+    render();
+    persistState();
+    return;
+  }
+
   const payload = {
     jobId,
     fileName: state.artwork.name || null,
@@ -598,6 +647,78 @@ async function submitDataPlaneJob() {
     render();
     persistState();
   }
+}
+
+function toggleBoardMode() {
+  state.artwork.boardMode = !state.artwork.boardMode;
+  const panel = document.getElementById('boardCompositionPanel');
+  const chk = document.getElementById('chkBoardMode');
+  if (chk) chk.checked = state.artwork.boardMode;
+  if (panel) panel.hidden = !state.artwork.boardMode;
+  render();
+  persistState();
+}
+
+function addPdfToBoard(file) {
+  if (!file) return;
+  const placements = state.artwork.board.placements || [];
+  placements.push({
+    pdfPath: file.path || file.name,
+    fileName: file.name || 'Unknown',
+    xInches: 0.5,
+    yInches: 0.5,
+    scale: 1,
+    rotation: 0,
+    pageNumber: 0
+  });
+  state.artwork.board.placements = placements;
+  renderBoardPdfList();
+  persistState();
+}
+
+function removePdfFromBoard(index) {
+  const placements = state.artwork.board.placements || [];
+  placements.splice(index, 1);
+  state.artwork.board.placements = placements;
+  renderBoardPdfList();
+  persistState();
+}
+
+function updateBoardPlacement(index, field, value) {
+  if (state.artwork.board.placements[index]) {
+    state.artwork.board.placements[index][field] = parseFloat(value) || 0;
+    persistState();
+  }
+}
+
+function renderBoardPdfList() {
+  const list = document.getElementById('boardPdfList');
+  if (!list) return;
+  list.innerHTML = '';
+  const placements = state.artwork.board.placements || [];
+  placements.forEach((p, i) => {
+    const item = document.createElement('div');
+    item.className = 'board-pdf-item';
+    item.innerHTML =
+      '<span class="pdf-filename" title="' + escapeHtml(p.fileName) + '">' + escapeHtml(p.fileName) + '</span>' +
+      '<input type="number" value="' + p.xInches + '" step="0.1" placeholder="X in" data-idx="' + i + '" data-field="xInches">' +
+      '<input type="number" value="' + p.yInches + '" step="0.1" placeholder="Y in" data-idx="' + i + '" data-field="yInches">' +
+      '<input type="number" value="' + (p.scale || 1) + '" step="0.1" placeholder="Scale" data-idx="' + i + '" data-field="scale">' +
+      '<input type="number" value="' + (p.rotation || 0) + '" step="1" placeholder="Deg" data-idx="' + i + '" data-field="rotation">' +
+      '<button class="btn-remove-pdf" type="button" data-idx="' + i + '">\u00d7</button>';
+
+    item.querySelectorAll('input[type="number"]').forEach(inp => {
+      inp.addEventListener('change', function () {
+        updateBoardPlacement(parseInt(this.dataset.idx), this.dataset.field, this.value);
+      });
+    });
+
+    item.querySelector('.btn-remove-pdf').addEventListener('click', function () {
+      removePdfFromBoard(parseInt(this.dataset.idx));
+    });
+
+    list.appendChild(item);
+  });
 }
 
 function updateSequenceStatus() {
@@ -4906,6 +5027,49 @@ function bindJobTableInteractions() {
   });
 }
 
+function bindBoardControls() {
+  const chkBoardMode = document.getElementById('chkBoardMode');
+  if (chkBoardMode) {
+    chkBoardMode.checked = state.artwork.boardMode || false;
+    chkBoardMode.addEventListener('change', toggleBoardMode);
+  }
+
+  const boardPanel = document.getElementById('boardCompositionPanel');
+  if (boardPanel) boardPanel.hidden = !state.artwork.boardMode;
+
+  const boardWidthInput = document.getElementById('boardWidthInches');
+  const boardHeightInput = document.getElementById('boardHeightInches');
+  if (boardWidthInput) {
+    boardWidthInput.value = state.artwork.board.widthInches;
+    boardWidthInput.addEventListener('change', function () {
+      state.artwork.board.widthInches = parseFloat(this.value) || 8.5;
+      persistState();
+    });
+  }
+  if (boardHeightInput) {
+    boardHeightInput.value = state.artwork.board.heightInches;
+    boardHeightInput.addEventListener('change', function () {
+      state.artwork.board.heightInches = parseFloat(this.value) || 11;
+      persistState();
+    });
+  }
+
+  const btnAddPdf = document.getElementById('btnAddPdfToBoard');
+  if (btnAddPdf) {
+    btnAddPdf.addEventListener('click', function () {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.pdf,application/pdf';
+      input.onchange = function () {
+        if (this.files && this.files[0]) addPdfToBoard(this.files[0]);
+      };
+      input.click();
+    });
+  }
+
+  if (state.artwork.boardMode) renderBoardPdfList();
+}
+
 function bindPdfInputs() {
   const fileInput = document.getElementById('pdfInput');
   const dropZone = document.getElementById('dropZone');
@@ -5254,6 +5418,7 @@ function bind() {
     if (btn && btn.classList?.add) btn.classList.add('btn-readonly');
   });
 
+  bindBoardControls();
   bindPdfInputs();
   bindPlacementControls();
   bindJobTableInteractions();
