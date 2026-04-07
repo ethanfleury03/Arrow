@@ -3,15 +3,14 @@
  * AI Test Generator — uses Ollama (codellama) to generate unit tests for app.js
  *
  * Usage:
- *   node scripts/ai-test-gen.js                    # generate tests for all untested functions
- *   node scripts/ai-test-gen.js --fn clamp        # generate for specific function
- *   node scripts/ai-test-gen.js --batch 5         # generate for next 5 untested
- *   node scripts/ai-test-gen.js --dry-run         # show what would be generated
+ *   node scripts/ai-test-gen.js              # generate for next 10 untested functions
+ *   node scripts/ai-test-gen.js --fn clamp  # generate for specific function
+ *   node scripts/ai-test-gen.js --batch 5    # generate for next 5
+ *   node scripts/ai-test-gen.js --dry-run    # preview what would be generated
  *
  * Prerequisites:
  *   - Ollama running:  brew services start ollama
  *   - Model pulled:    ollama pull codellama
- *   - Ollama URL:      http://localhost:11434 (override with OLLAMA_URL env)
  */
 
 'use strict';
@@ -20,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-// ── Config ────────────────────────────────────────────────────────────────────
+// ── Config ──────────────────────────────────────────────────────────────────────
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const MODEL = process.env.OLLAMA_MODEL || 'codellama';
 const APP_JS = path.resolve(__dirname, '../src/app.js');
@@ -29,285 +28,231 @@ const OUTPUT_FILE = path.resolve(__dirname, '../tests/unit/ai-generated.test.js'
 
 // ── Parse command line ────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
-const flags = {
-  dryRun: args.includes('--dry-run'),
-  fn: null,
-  batch: null,
-};
+const flags = { dryRun: false, fn: null, batch: null };
 for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--dry-run') flags.dryRun = true;
   if (args[i] === '--fn' && args[i + 1]) flags.fn = args[i + 1];
   if (args[i] === '--batch' && args[i + 1]) flags.batch = parseInt(args[i + 1], 10);
 }
 
-// ── Read source files ────────────────────────────────────────────────────────
+// ── Read app.js source ────────────────────────────────────────────────────────
 const appSource = fs.readFileSync(APP_JS, 'utf8');
 
-// ── Extract all function declarations ────────────────────────────────────────
+// ── Extract function declarations ──────────────────────────────────────────────
 const FN_DECL = /^function\s+(\w+)\s*\(([^)]*)\)\s*\{/gm;
 const functions = [];
-let match;
-while ((match = FN_DECL.exec(appSource)) !== null) {
-  const name = match[1];
-  const params = match[2].trim();
-  const start = match.index;
-  // Find the matching closing brace by counting braces
+let m;
+while ((m = FN_DECL.exec(appSource)) !== null) {
+  const name = m[1], params = m[2].trim(), start = m.index;
   let depth = 0, end = start;
   for (let i = start; i < appSource.length; i++) {
     if (appSource[i] === '{') depth++;
-    else if (appSource[i] === '}') {
-      depth--;
-      if (depth === 0) { end = i + 1; break; }
-    }
+    else if (appSource[i] === '}') { if (--depth === 0) { end = i + 1; break; } }
   }
-  functions.push({
-    name,
-    params,
-    source: appSource.slice(start, end),
-    line: appSource.slice(0, start).split('\n').length,
-  });
+  functions.push({ name, params, source: appSource.slice(start, end), line: appSource.slice(0, start).split('\n').length });
 }
-
 console.log(`Found ${functions.length} functions in app.js`);
 
-// ── Extract existing test function names ──────────────────────────────────────
-const existingTestFns = new Set();
-if (fs.existsSync(TEST_FILE)) {
-  const testSource = fs.readFileSync(TEST_FILE, 'utf8');
-  const testFnDecl = /^test\(['"]([^'"]+)['"]/gm;
-  while ((match = testFnDecl.exec(testSource)) !== null) {
-    existingTestFns.add(match[1]);
-  }
-}
-console.log(`${existingTestFns.size} test names already in app.test.js`);
+// ── Known tested functions ─────────────────────────────────────────────────────
+const testedFns = new Set([
+  // app.test.js
+  'clamp', 'mmToIn', 'inToMm', 'escapeHtml', 'deepClone', 'generateJobId',
+  'getBasename', 'normalizeJobStatus', 'isTerminalJobStatus', 'isActiveJobStatus',
+  'isPreflightReadyEngineState', 'getPresetDimensionsMm', 'inferPresetAndOrientation',
+  'mergePlacement', 'isLocalStorageAvailable', 'readJsonFromStorage',
+  'writeJsonToStorage', 'getActionableError', 'hasSimulatedSignal',
+  'getBoardHitInfo', 'removePdfFromBoard', 'updateBoardPlacement',
+  'formatInchesForInput',
+  // board.test.js
+  'toggleBoardMode', 'addPdfToBoard', 'renderBoardPdfList',
+  // Already generated (skip on re-run)
+  'getPresetDimensionsForOrientation', 'getStatusFreshnessMs',
+]);
 
-// ── Filter to untested functions ─────────────────────────────────────────────
-// Only include functions that are testable without DOM (no document.getElementById,
-// addEventListener, fetch, etc.) and have no more than 5 params
-const DOM_PATTERNS = [
-  'document\.', 'window\.', 'addEventListener', 'removeEventListener',
-  'fetch(', 'XMLHttpRequest', 'localStorage\.setItem', 'localStorage\.getItem',
-  'querySelector', 'createElement', 'appendChild', 'setInterval',
-  'setTimeout(', 'getContext(', 'canvas', 'getBoundingClientRect',
-  'addPdfToBoard', 'renderBoardPreview', 'renderLayoutPreview', 'renderBoardPdfList',
-  'bindBoardControls', 'bindTopTabs', 'bindLeftSidebar', 'bindRightSidebar',
-  'bindJobArrangeTabs', 'bindJobsTableTabs', 'syncLeftSidebarTabUI',
-  'syncRightSidebarTabUI', 'syncTopTabUI', 'renderLayoutRuler',
-  'render', 'startStatusPolling', 'hydrateRuntimeConfig',
-  'hydratePersistedJobs', 'persistState', 'log(', 'renderBoardPdfPage',
+// ── Testability filter ─────────────────────────────────────────────────────────
+const EXCLUDE_PATTERNS = [
+  /document\./, /window\./, /addEventListener/, /removeEventListener/,
+  /fetch\(/, /XMLHttpRequest/, /querySelector/, /createElement/, /appendChild/,
+  /setInterval/, /setTimeout/, /getContext/, /getBoundingClientRect/,
+  /renderBoardPreview/, /renderLayoutPreview/, /renderBoardPdfList/,
+  /renderLayoutRuler/, /bindBoard/, /bindTop/, /bindLeft/, /bindRight/,
+  /bindJobArrange/, /bindJobsTable/,
+  /syncLeftSidebarTabUI/, /syncRightSidebarTabUI/, /syncTopTabUI/,
+  /startStatusPolling/, /hydrateRuntimeConfig/, /hydratePersistedJobs/,
+  /persistState/, /log\(/, /renderBoardPdfPage/, /render\(/,
+  /openSendJobDialog/, /closeSendJobDialog/, /runDiscovery/,
+  /pressControl/, /runPipeline/, /runFault/, /runRecovery/,
+  /applyPageSize/, /applyPlacement/, /handleImageFile/, /handleArtworkFile/,
 ];
 
 function isTestable(fn) {
   if (fn.params.split(',').length > 4) return false;
-  for (const pat of DOM_PATTERNS) {
-    const re = new RegExp(pat.replace(/\(/g, '\\('));
-    if (re.test(fn.source)) return false;
-  }
-  return true;
+  return !EXCLUDE_PATTERNS.some(p => p.test(fn.source));
 }
 
-const testedFns = new Set(
-  ['clamp', 'mmToIn', 'inToMm', 'escapeHtml', 'deepClone', 'generateJobId',
-   'getBasename', 'normalizeJobStatus', 'isTerminalJobStatus', 'isActiveJobStatus',
-   'isPreflightReadyEngineState', 'getPresetDimensionsMm', 'inferPresetAndOrientation',
-   'mergePlacement', 'isLocalStorageAvailable', 'readJsonFromStorage',
-   'writeJsonToStorage', 'getActionableError', 'hasSimulatedSignal',
-   'getBoardHitInfo', 'removePdfFromBoard', 'updateBoardPlacement',
-   'formatInchesForInput'].map(k => k.toLowerCase())
-);
+const candidates = functions.filter(fn => !testedFns.has(fn.name) && isTestable(fn));
+console.log(`${candidates.length} testable candidates (excluding ${testedFns.size} already tested)`);
+console.log('  Next:', candidates.slice(0, 5).map(f => f.name).join(', '));
 
-const candidates = functions.filter(fn => {
-  if (testedFns.has(fn.name.toLowerCase())) return false;
-  return isTestable(fn);
-});
-
-console.log(`${candidates.length} candidates are testable without DOM mocking`);
-if (candidates.length > 0) {
-  console.log('  Candidates:', candidates.map(f => f.name).join(', '));
-}
-
-// ── Select functions to generate ───────────────────────────────────────────────
-let targetFns;
+// ── Select targets ────────────────────────────────────────────────────────────
+let targets;
 if (flags.fn) {
-  targetFns = candidates.filter(f => f.name === flags.fn);
-  if (!targetFns.length) {
-    console.error(`Function '${flags.fn}' not found or not testable`);
-    process.exit(1);
-  }
+  targets = candidates.filter(f => f.name === flags.fn);
+  if (!targets.length) { console.error(`'${flags.fn}' not found or not testable`); process.exit(1); }
 } else if (flags.batch) {
-  targetFns = candidates.slice(0, flags.batch);
+  targets = candidates.slice(0, flags.batch);
 } else {
-  targetFns = candidates.slice(0, 10); // default: next 10
+  targets = candidates.slice(0, 10);
 }
 
-// ── Build prompt ─────────────────────────────────────────────────────────────
-const existingTests = fs.existsSync(TEST_FILE)
-  ? fs.readFileSync(TEST_FILE, 'utf8').slice(0, 4000)
-  : '// No existing tests yet';
+// ── Prompt builder ────────────────────────────────────────────────────────────
+const existingSnippet = fs.existsSync(TEST_FILE) ? fs.readFileSync(TEST_FILE, 'utf8').slice(0, 2000) : '// no existing tests yet';
 
 function buildPrompt(fn) {
-  return `You are a JavaScript unit test generator. You write tests using Node.js assert.
+  return `You write JavaScript unit tests using Node.js assert. Copy this exact format:
 
-EXISTING TEST FILE (format reference):
-${existingTests}
+let passed = 0, failed = 0;
+function test(name, fn) {
+  try { fn(); passed++; console.log('  ✓', name); }
+  catch(e) { failed++; console.error('  ✗', name, e.message); }
+}
+function eq(a, e) { if (JSON.stringify(a) !== JSON.stringify(e)) throw new Error('Expected '+JSON.stringify(e)+' Got '+JSON.stringify(a)); }
+function assertOk(v) { if (!v) throw new Error('Expected truthy, got ' + JSON.stringify(v)); }
 
-FUNCTION TO TEST:
+FUNCTION:
 ${fn.source}
 
-Generate unit tests for the function \`${fn.name}\` with signature:
-  ${fn.name}(${fn.params})
+Write 4-8 tests for \`${fn.name}(${fn.params})\` covering:
+- Happy path cases
+- Edge cases: null, undefined, 0, -1, negative, very large, NaN, Infinity
+- Type coercion: string numbers, empty string, boolean strings
+- Boundary conditions
 
 Rules:
-1. Use Node.js \`assert\` module: const assert = require('node:assert');
-2. Test format: function test(name, fn) { try { fn(); console.log('  ✓', name); } catch(e) { console.error('  ✗', name, e.message); process.exitCode=1; } }
-3. Each test file exports: passed, failed counters and process.exit(1) if any failed
-4. The function is available as a global (same V8 context as app.js loaded via jsdom)
-5. state is also a global object — read state.artwork, state.jobs, state.config etc. to set up test fixtures
-6. boardSelectedIndex is available as window.__boardSelectedIndex
-7. Write 4-8 diverse test cases covering:
-   - Normal happy-path cases
-   - Edge cases (null, undefined, empty, zero, negative, very large values)
-   - Type coercion (string numbers, etc.)
-   - Boundary conditions
-8. Do NOT mock DOM — only test pure logic or functions that operate on state
-9. Return ONLY the test JavaScript code, no markdown fences, no explanations
-
-Start directly with the test code.`;
+- Use ONLY Node.js built-ins (no DOM, no fetch, no network)
+- Function is available as a global
+- \`state\` global is available for fixture setup
+- \`window.__boardSelectedIndex\` for board selection
+- Replace process.exit(1) with process.exitCode = 1 so multiple blocks can run together
+- Return ONLY the JavaScript code, NO markdown fences
+- Start directly with: let passed`;
 }
 
 // ── Call Ollama ──────────────────────────────────────────────────────────────
-function callOllama(prompt) {
+function ollama(prompt) {
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify({
-      model: MODEL,
-      prompt,
-      stream: false,
-      options: {
-        temperature: 0.2,
-        top_p: 0.9,
-        num_predict: 2048,
-      }
-    });
-
+    const body = JSON.stringify({ model: MODEL, prompt, stream: false, options: { temperature: 0.2, num_predict: 2048 } });
     const url = new URL('/api/generate', OLLAMA_URL);
-    const req = http.request({
-      hostname: url.hostname,
-      port: url.port,
-      path: url.pathname,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body),
-      }
-    }, res => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        if (res.statusCode !== 200) {
-          reject(new Error(`Ollama returned ${res.statusCode}: ${data}`));
-          return;
-        }
-        try {
-          const json = JSON.parse(data);
-          resolve(json.response || '');
-        } catch (e) {
-          reject(new Error(`Invalid JSON from Ollama: ${data.slice(0, 200)}`));
-        }
+    const req = http.request({ hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+      res => {
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => {
+          if (res.statusCode !== 200) { reject(new Error(`Ollama ${res.statusCode}`)); return; }
+          try { resolve(JSON.parse(data).response); }
+          catch (e) { reject(new Error('Bad JSON')); }
+        });
       });
-    });
-    req.on('error', e => reject(new Error(`Ollama connection error: ${e.message}`)));
-    req.write(body);
-    req.end();
+    req.on('error', e => reject(e));
+    req.write(body); req.end();
   });
 }
 
-// ── Parse generated code ─────────────────────────────────────────────────────
+// ── Parse code ───────────────────────────────────────────────────────────────
 function extractCode(response) {
-  // Remove markdown fences if present
   let code = response.replace(/^```(?:javascript|js)?\n?/gm, '').replace(/```$/gm, '').trim();
-  // Remove any leading explanation text before the first 'function test(' or 'const assert'
-  const firstFn = code.indexOf('function test(');
-  const firstAssert = code.indexOf('const assert');
-  const start = Math.max(0, Math.min(firstFn !== -1 ? firstFn : Infinity, firstAssert !== -1 ? firstAssert : Infinity));
-  if (start > 0) code = code.slice(start);
+
+  // Strip any leading explanation text
+  const firstLet = code.indexOf('let passed');
+  if (firstLet > 0) code = code.slice(firstLet);
+
+  // If code starts with 'let passed' (possibly with 'let ' before it), extract just the variable
+  // declarations and prepend them cleanly
+  if (!/^let passed/.test(code)) {
+    // Try to find 'let passed =' and use that as the start
+    const match = code.match(/let passed = \d+/);
+    if (match) {
+      const declEnd = code.indexOf(';', match.index);
+      const decl = code.slice(match.index, declEnd + 1); // 'let passed = 0, failed = 0;'
+      const rest = code.slice(declEnd + 1);
+      code = 'let passed = 0, failed = 0;\n' + rest;
+    } else {
+      code = 'let passed = 0, failed = 0;\n' + code;
+    }
+  }
+
   return code;
 }
 
-// ── Main generation loop ─────────────────────────────────────────────────────
+// ── Write block ────────────────────────────────────────────────────────────────
+function writeBlock(fnName, code, status) {
+  const header = `// ═══ ${fnName} ═══ ${status}\n`;
+  const footer = '\nif (failed > 0) { console.error(`  [${fnName}: ${failed} failures]`); process.exitCode = 1; }\n\n';
+  const content = header + code + footer;
+  if (fs.existsSync(OUTPUT_FILE)) {
+    fs.appendFileSync(OUTPUT_FILE, content);
+  } else {
+    fs.writeFileSync(OUTPUT_FILE,
+      `// AI-Generated — ${new Date().toISOString().slice(0,10)} | ${MODEL} | ${OLLAMA_URL}\n` +
+      `'use strict';\n\n` + content
+    );
+  }
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-  const results = [];
+  if (!flags.dryRun && fs.existsSync(OUTPUT_FILE)) fs.unlinkSync(OUTPUT_FILE);
 
-  for (const fn of targetFns) {
-    console.log(`\nGenerating tests for \`${fn.name}\` (line ${fn.line})...`);
+  let ok = 0, bad = 0;
 
-    if (flags.dryRun) {
-      console.log(`  [dry-run] Would generate for ${fn.name}(${fn.params})`);
-      continue;
-    }
+  for (const fn of targets) {
+    process.stdout.write(`Generating \`${fn.name}\`... `);
+
+    if (flags.dryRun) { console.log('[dry-run]'); continue; }
 
     try {
-      const prompt = buildPrompt(fn);
-      const response = await callOllama(prompt);
-      const code = extractCode(response);
+      const raw = await ollama(buildPrompt(fn));
+      let code = extractCode(raw);
 
-      if (!code || code.length < 50) {
-        console.error(`  ✗ Empty or too-short response for ${fn.name}`);
-        results.push({ fn: fn.name, status: 'empty', code: '' });
-        continue;
+      if (!code || code.length < 30) {
+        console.log('⚠ empty'); bad++; continue;
       }
 
-      // Try to eval the code in a sandbox to check for syntax errors
-      try {
-        new Function(code);
-        console.log(`  ✓ Generated ${code.split('\n').length} lines (syntax OK)`);
-        results.push({ fn: fn.name, status: 'ok', code });
-      } catch (e) {
-        console.error(`  ✗ Syntax error in generated code: ${e.message}`);
-        // Still save it with a .err extension for manual review
-        results.push({ fn: fn.name, status: 'syntax-error', code });
-        const errFile = OUTPUT_FILE.replace('.test.js', `-${fn.name}.err.js`);
-        fs.writeFileSync(errFile, code);
-        console.error(`  Saved to ${errFile} for review`);
+      // Replace bare process.exit(1) with exitCode
+      code = code.replace(/process\.exit\(1\)/g, 'process.exitCode = 1');
+
+      // Fix missing let/const for eq/assertOk
+      if (!/^let passed/.test(code)) {
+        code = 'let passed = 0, failed = 0;\n' + code;
       }
+
+      // Syntax check
+      try { new Function(code); }
+      catch (e) {
+        // Try to auto-fix common issues
+        const fixed = code
+          .replace(/,\s*$/gm, '')           // trailing commas
+          .replace(/^function test\(['"](.+)['"]/gm, "function test('$1'")
+          .replace(/console\.error\(['"]\\\s*✗/g, "console.error('  ✗");
+        try { new Function(fixed); code = fixed; }
+        catch (e2) {
+          console.log(`✗ syntax: ${e.message.slice(0, 60)}`);
+          writeBlock(fn.name, code, `SYNTAX_ERR: ${e.message.slice(0, 40)}`);
+          bad++; continue;
+        }
+      }
+
+      writeBlock(fn.name, code, 'generated');
+      console.log(`✓ (${code.split('\n').length} lines)`);
+      ok++;
     } catch (e) {
-      console.error(`  ✗ Failed: ${e.message}`);
-      results.push({ fn: fn.name, status: 'error', error: e.message });
+      console.log(`✗ ${e.message.slice(0, 80)}`);
+      bad++;
     }
   }
 
-  // ── Write output file ─────────────────────────────────────────────────────
-  const okResults = results.filter(r => r.status === 'ok');
-  if (!flags.dryRun && okResults.length > 0) {
-    const header = `/** AI-Generated Tests — ${new Date().toISOString().slice(0, 10)}
- * Generated by: scripts/ai-test-gen.js
- * Model: ${MODEL} @ ${OLLAMA_URL}
- * Functions: ${okResults.map(r => r.fn).join(', ')}
- */
-'use strict';\n\n`;
-
-    const combined = header + okResults.map(r => r.code).join('\n\n');
-
-    // Append to existing or create new
-    if (fs.existsSync(OUTPUT_FILE)) {
-      const existing = fs.readFileSync(OUTPUT_FILE, 'utf8');
-      fs.writeFileSync(OUTPUT_FILE, existing + '\n' + combined);
-    } else {
-      fs.writeFileSync(OUTPUT_FILE, combined);
-    }
-
-    console.log(`\nWrote ${okResults.length} test blocks to ${OUTPUT_FILE}`);
-  }
-
-  // ── Summary ────────────────────────────────────────────────────────────────
-  console.log('\nSummary:');
-  for (const r of results) {
-    const icon = r.status === 'ok' ? '✓' : r.status === 'empty' ? '⚠' : '✗';
-    console.log(`  ${icon} ${r.fn}: ${r.status}`);
-  }
-  const ok = results.filter(r => r.status === 'ok').length;
-  const total = results.length;
-  console.log(`\n${ok}/${total} generated successfully`);
-
-  if (ok < total) process.exit(1);
+  console.log(`\n─── ${ok} ok, ${bad} failed ───`);
+  if (bad > 0) process.exit(1);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });
