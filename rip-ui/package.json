@@ -52,7 +52,10 @@
     "ci:reports": "npm run preflight && npm run report:scenarios && npm run release:manifest && npm run report:control && npm run handoff:bundle && npm run test:handoff && npm run report:submitter && npm run report:hookup && npm run test:ops && npm run report:ops && npm run report:config && npm run guard:completion",
     "test:app": "node --require ./tests/unit/jsdom.setup.js tests/unit/app.test.js",
     "test:app:coverage": "npm run test:app && echo \"Note: c8 cannot track jsdom window.eval scripts — see tests/unit/README.md\"",
-    "test:board": "node --require ./tests/unit/jsdom.setup.js tests/unit/board.test.js"
+    "test:board": "node --require ./tests/unit/jsdom.setup.js tests/unit/board.test.js",
+    "ai:test-gen": "node scripts/ai-test-gen.js",
+    "ai:test-gen:dry": "node scripts/ai-test-gen.js --dry-run",
+    "ai:test-gen:batch": "node scripts/ai-test-gen.js --batch 5"
   },
   "build": {
     "appId": "com.arrow.ripuiprototype",
