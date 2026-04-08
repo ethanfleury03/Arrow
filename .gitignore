@@ -18,3 +18,7 @@ data/temp/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Ghostscript installation (only the installer .exe is in git via LFS; extracted gs/ dir is gitignored)
+rip-core/vendor/ghostscript/gs/
+
