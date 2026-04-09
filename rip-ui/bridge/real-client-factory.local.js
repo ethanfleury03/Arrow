@@ -242,7 +242,7 @@ async function runMemjetRipSubmit({ artifactPath, host, dataPort, copies = 1, lo
           TMP: plan.tempDir,
           JSL_CONFIG_PATH: plan.jslConfigPath,
           JSL_NUM_COPIES: String(perRunCopies),
-          PATH: `${plan.ripCoreRoot}${path.sep}vendor${path.sep}runtime${path.sep}jsl${path.delimiter}${process.env.PATH}`
+          PATH: `${plan.ripCoreRoot}${path.sep}vendor${path.sep}runtime${path.sep}jsl${path.delimiter}${plan.ripCoreRoot}${path.sep}vendor${path.sep}ghostscript${path.sep}gs${path.sep}bin${path.delimiter}${process.env.PATH}`
         }
       });
 
@@ -793,7 +793,8 @@ async function createLocalClient({ host, commandPort, dataPort, protocol, transp
       }
 
       try {
-        const jslDllPath = `${plan.ripCoreRoot}${path.sep}vendor${path.sep}runtime${path.sep}jsl${path.delimiter}${process.env.PATH}`;
+        const gsBinPath = `${plan.ripCoreRoot}${path.sep}vendor${path.sep}ghostscript${path.sep}gs${path.sep}bin${path.delimiter}${process.env.PATH}`;
+        const jslDllPath = `${plan.ripCoreRoot}${path.sep}vendor${path.sep}runtime${path.sep}jsl${path.delimiter}${gsBinPath}`;
         const { stdout, stderr } = await execFileAsync(plan.tool, plan.args, {
           timeout: Number(process.env.MEMJET_SUBMIT_TIMEOUT_MS || 30000),
           maxBuffer: 4 * 1024 * 1024,
@@ -1035,7 +1036,8 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
           }
 
           try {
-            const jslDllPath = `${plan.ripCoreRoot}${path.sep}vendor${path.sep}runtime${path.sep}jsl${path.delimiter}${process.env.PATH}`;
+            const gsBinPath = `${plan.ripCoreRoot}${path.sep}vendor${path.sep}ghostscript${path.sep}gs${path.sep}bin${path.delimiter}${process.env.PATH}`;
+            const jslDllPath = `${plan.ripCoreRoot}${path.sep}vendor${path.sep}runtime${path.sep}jsl${path.delimiter}${gsBinPath}`;
             const { stdout, stderr } = await execFileAsync(plan.tool, plan.args, {
               timeout: Number(process.env.MEMJET_SUBMIT_TIMEOUT_MS || 30000),
               maxBuffer: 4 * 1024 * 1024,
