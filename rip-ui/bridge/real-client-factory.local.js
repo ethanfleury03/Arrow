@@ -342,21 +342,21 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const env = process.env;
   const backend = String(env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
 
-  const sshHost = String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || ARROW_PES.host).trim();
-  const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || '').trim();
+  const sshHost = String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || ARROW_PES.sshHost).trim();
+  const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || ARROW_PES.sshUser).trim();
   const sshPassword = String(env.MEMJET_SSH_PASSWORD || env.RIP_SSH_PASSWORD || '').trim();
 
-  // Deterministic SSH key path: hardcoded for Arrow rig to avoid USERPROFILE variability
+  // Default SSH key path; override with MEMJET_SSH_KEY_PATH if your key differs
+  // On Windows, USERPROFILE is used to find the .ssh folder
   const defaultUserKey = process.platform === 'win32'
-    ? 'C:\\Users\\Arrow\\.ssh\\id_ed25519'
+    ? path.join(env.USERPROFILE || 'C:\\Users\\Public', '.ssh', 'id_ed25519')
     : path.join(env.HOME || '', '.ssh', 'id_ed25519');
   const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || defaultUserKey).trim();
-  const sshPort = Number(env.MEMJET_SSH_PORT || env.RIP_SSH_PORT || 22);
+  const sshPort = Number(env.MEMJET_SSH_PORT || env.RIP_SSH_PORT || ARROW_PES.sshPort || 22);
   const sshBin = String(env.MEMJET_SSH_BIN || 'ssh').trim();
   const sshTimeoutMs = Number(env.MEMJET_SSH_TIMEOUT_MS || 30000);
   const cmdTemplate = String(
-    env.MEMJET_SSH_REMOTE_CMD_TEMPLATE
-      || '/usr/local/bin/pesctl --op {operation} --args-b64 {args_json_b64} --host {host} --command-port {commandPort} --event-port {eventPort} --data-port {dataPort}'
+    env.MEMJET_SSH_REMOTE_CMD_TEMPLATE || ARROW_PES.sshRemoteCmdTemplate || ''
   ).trim();
 
   const missing = [];
