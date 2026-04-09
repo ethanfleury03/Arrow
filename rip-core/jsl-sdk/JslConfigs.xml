@@ -56,7 +56,7 @@
         <!-- Match your runtime job color order: M C K Y -->
         <printheadModule color="JSLIB_MAGENTA JSLIB_CYAN JSLIB_BLACK JSLIB_YELLOW">
           <socket type="primary">
-            <hostAddress>192.168.111.1</hostAddress>
+            <hostAddress>192.168.100.200</hostAddress>
             <port>9100</port>
           </socket>
         </printheadModule>
