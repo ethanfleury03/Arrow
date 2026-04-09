@@ -13,6 +13,7 @@ const {
   resolveEngineState
 } = require('./engine-state');
 const { buildSshSettings, runSshSelfCheck } = require('./real-client-factory.local');
+const { loadPesDefaults } = require('./pes-defaults');
 
 function json(res, statusCode, body) {
   res.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
@@ -136,10 +137,11 @@ async function performStartupSelfCheck({ config, logger, skipIfLocal = false }) 
     return { ok: true, skipped: true };
   }
 
-  // Check if SSH is configured
-  const sshHost = String(process.env.MEMJET_SSH_HOST || process.env.RIP_SSH_HOST || '').trim();
-  const sshUser = String(process.env.MEMJET_SSH_USER || process.env.RIP_SSH_USER || '').trim();
-  const cmdTemplate = String(process.env.MEMJET_SSH_REMOTE_CMD_TEMPLATE || '').trim();
+  // Check if SSH is configured — fall back to pes-defaults.js hardcoded values
+  const ARROW_PES = loadPesDefaults();
+  const sshHost = String(process.env.MEMJET_SSH_HOST || process.env.RIP_SSH_HOST || ARROW_PES.sshHost || '').trim();
+  const sshUser = String(process.env.MEMJET_SSH_USER || process.env.RIP_SSH_USER || ARROW_PES.sshUser || '').trim();
+  const cmdTemplate = String(process.env.MEMJET_SSH_REMOTE_CMD_TEMPLATE || ARROW_PES.sshRemoteCmdTemplate || '').trim();
 
   if (!sshHost || !sshUser || !cmdTemplate) {
     const missing = [
