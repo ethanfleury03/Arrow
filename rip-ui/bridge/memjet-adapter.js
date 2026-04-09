@@ -141,13 +141,31 @@ class ThriftMemjetAdapter extends MemjetAdapter {
   async _buildDiagnostics() {
     const thriftLoadable = Boolean(this._loadThriftModule());
     const clientFactoryLoadable = Boolean(this._loadClientFactory());
-    const commandReach = await checkTcp(this.config.host, this.config.commandPort, this.config.connectTimeoutMs);
-    const eventReach = await checkTcp(this.config.host, this.config.eventPort, this.config.connectTimeoutMs);
+
+    // When backend is SSH, skip direct TCP probe — the startup self-check
+    // (runSshSelfCheck) already proved the SSH path works. Direct TCP to the
+    // Memjet host will time out because that IP is only reachable via the tunnel.
+    const isSshBackend = this.config.backend === 'ssh';
+
+    let commandReach = { ok: false, reason: null };
+    let eventReach = { ok: false, reason: null };
+
+    if (!isSshBackend) {
+      commandReach = await checkTcp(this.config.host, this.config.commandPort, this.config.connectTimeoutMs);
+      eventReach = await checkTcp(this.config.host, this.config.eventPort, this.config.connectTimeoutMs);
+    } else {
+      // SSH backend: trust the startup self-check result. Thrift + factory
+      // loadability is the only remaining pre-condition.
+      commandReach = { ok: null, reason: 'skipped_ssh_backend' };
+      eventReach = { ok: null, reason: 'skipped_ssh_backend' };
+    }
+
     const gateState = this._buildGateState();
 
     const diagnostics = {
       mode: 'real',
       protocol: this.config.protocol,
+      backend: this.config.backend || 'direct',
       host: this.config.host,
       ports: {
         command: this.config.commandPort,
@@ -165,7 +183,11 @@ class ThriftMemjetAdapter extends MemjetAdapter {
       operations: gateState.operations,
       lastRealCall: this._lastRealCall,
       capability: {
-        controlPlaneReady: thriftLoadable && clientFactoryLoadable && commandReach.ok,
+        // For SSH backend, control plane is ready if Thrift + factory load
+        // successfully (actual connectivity was proven at startup by runSshSelfCheck)
+        controlPlaneReady: isSshBackend
+          ? (thriftLoadable && clientFactoryLoadable)
+          : (thriftLoadable && clientFactoryLoadable && commandReach.ok),
         dataPlaneReady: Boolean(this.config.allowDataSubmission)
       }
     };
