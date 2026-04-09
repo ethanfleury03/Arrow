@@ -135,7 +135,7 @@ function getSubmitMode() {
 function buildMemjetRipCommand({ artifactPath, host, dataPort, copies = 1 }) {
   const repoRoot = path.resolve(process.cwd(), '..');
   const configured = process.env.MEMJET_RIP_BIN || process.env.MEMJET_SUBMITTER_BIN || process.env.RIP_MEMJET_RIP_BIN;
-  const defaultWinBin = path.resolve(repoRoot, 'rip-core', 'src', 'build', 'Release', 'memjet-rip.exe');
+  const defaultWinBin = path.resolve(repoRoot, 'rip-core', 'vendor', 'memjet-rip.exe');
   const tool = configured || ((process.platform === 'win32' && fs.existsSync(defaultWinBin)) ? defaultWinBin : 'memjet-rip.exe');
   const ripCoreRoot = process.env.MEMJET_RIP_ROOT || path.resolve(repoRoot, 'rip-core');
   const defaultTempDir = path.resolve(ripCoreRoot, 'temp');
