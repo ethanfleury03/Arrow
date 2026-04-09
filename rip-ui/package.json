@@ -27,7 +27,7 @@
     "test:bridge:v1": "node tests/bridge-v1.test.js",
     "test:bridge:phase1": "node tests/bridge-phase1.test.js",
     "test:head-controls": "node tests/head-controls-bridge.test.js",
-    "bridge:start": "set MEMJET_REAL_BACKEND=ssh&& node bridge/server.js",
+    "bridge:start": "set MEMJET_REAL_BACKEND=ssh&& set ARROW_PES_HOST=192.168.100.200&& set MEMJET_TARGET_HOST=192.168.100.200&& node bridge/server.js",
     "bridge:check": "node bridge/self-check.js",
     "test:backend": "node tests/rip-backend.test.js",
     "test:real-client-selection": "node tests/real-client-selection.test.js",
