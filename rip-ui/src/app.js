@@ -5763,6 +5763,31 @@ function bind() {
   bindClick('btnAlignBottom', () => setAlign('y', 'bottom'));
   bindClick('btnAutoSendToggle', toggleAutoSend);
   bindClick('btnFinishPrinting', () => executeCommand('print_finish'));
+  bindClick('btnReboot', async () => {
+    const btn = document.getElementById('btnReboot');
+    if (!btn) return;
+    const confirmed = window.confirm('Send reboot command to duraflex@192.168.100.200?\n\nThe machine will restart immediately.');
+    if (!confirmed) return;
+    btn.disabled = true;
+    const txtSpan = btn.querySelector('.reboot-text');
+    if (txtSpan) txtSpan.textContent = 'Rebooting\u2026';
+    try {
+      const bridgeBase = String(state.config?.bridgeBaseUrl || 'http://127.0.0.1:8787').replace(/\/$/, '');
+      const res = await fetch(`${bridgeBase}/api/system/reboot`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        window.alert('Reboot command sent. The machine is restarting.');
+      } else {
+        window.alert('Reboot failed: ' + (data.message || data.error || 'Unknown error'));
+      }
+    } catch (err) {
+      window.alert('Reboot error: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      const txt = btn.querySelector('.reboot-text');
+      if (txt) txt.textContent = 'Reboot';
+    }
+  });
   bindClick('btnToggleDiscoveryMode', toggleDiscoveryMode);
   bindClick('btnFlipHorizontal', () => toggleFlip('x'));
   bindClick('btnFlipVertical', () => toggleFlip('y'));

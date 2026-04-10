@@ -4,6 +4,7 @@ const { loadBridgeConfig } = require('./config');
 const { createLogger } = require('./logger');
 const { createMemjetAdapter, AdapterCapabilityError } = require('./memjet-adapter');
 const { JobManager } = require('./job-manager');
+const { Client: SshClient } = require('ssh2');
 const {
   ENGINE_STATE_VALUE_TO_NAME,
   ENGINE_STATE_NAME_TO_UI,
@@ -678,6 +679,34 @@ function createBridgeServer(options = {}) {
 
       if (req.method === 'GET' && url.pathname === '/api/queue') {
         return json(res, 200, { queue: manager.getQueue() });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/system/reboot') {
+        try {
+          await new Promise((resolve, reject) => {
+            const conn = new SshClient();
+            conn.on('ready', () => {
+              conn.exec('sudo reboot', (err, stream) => {
+                if (err) { conn.end(); return reject(err); }
+                stream.on('close', () => { conn.end(); resolve(); });
+                stream.on('data', () => {});
+                stream.stderr.on('data', () => {});
+              });
+            });
+            conn.on('error', reject);
+            conn.connect({
+              host: '192.168.100.200',
+              port: 22,
+              username: 'duraflex',
+              password: 'duraflex',
+              readyTimeout: 8000
+            });
+          });
+          return json(res, 200, { ok: true, message: 'Reboot command sent' });
+        } catch (err) {
+          logger.error({ msg: 'bridge.system.reboot.error', err: err.message });
+          return json(res, 500, { error: 'reboot_failed', message: err.message });
+        }
       }
 
       return json(res, 404, { error: 'not_found' });
