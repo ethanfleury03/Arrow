@@ -300,10 +300,9 @@ function createBridgeServer(options = {}) {
     const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
     let sshAttempts = 0;
 
-    // Phase 1 — broadcast REBOOTING and hold for 60s
-    setRebootState('rebooting');
+    // rebootState is already set to 'rebooting' by the HTTP handler — just log the hold
     const resumeAt = new Date(Date.now() + SAFETY_HOLD_MS).toISOString();
-    process.stderr.write('\n[REBOOT] 60s safety hold — polling starts at ' + resumeAt + '\n');
+    process.stderr.write('\n[REBOOT] 2min safety hold — polling starts at ' + resumeAt + '\n');
     logger.info({ msg: 'bridge.system.reboot.hold_start', host: sshHost, resumeAt });
 
     setTimeout(startPolling, SAFETY_HOLD_MS);
@@ -369,7 +368,18 @@ function createBridgeServer(options = {}) {
         return;
       }
 
-      // Wait for OFF — the clean post-boot state before any initialisation
+      // States past OFF mean the machine already got initialised (manually or by a
+      // previous watcher invocation).  Stop without initialising again.
+      const ALREADY_INITIALISED = ['INITIALISING', 'IDLE', 'READY', 'PRIMED_IDLE', 'PRINTING', 'MAINTENANCE'];
+      if (ALREADY_INITIALISED.indexOf(engineState) !== -1) {
+        rebootWatcherActive = false;
+        process.stderr.write('\n[REBOOT] engineState=' + engineState + ' — machine already initialised, watcher done\n\n');
+        logger.info({ msg: 'bridge.system.reboot.already_initialised', host: sshHost, engineState });
+        setRebootState(null);
+        return;
+      }
+
+      // Still not OFF and not a known-alive state — PES not ready yet, keep polling
       if (engineState !== 'OFF' && engineState !== '0') {
         process.stderr.write('[REBOOT] engineState=' + engineState + ' (want OFF) — retrying\n');
         setTimeout(tryPing, SSH_POLL_INTERVAL_MS);
@@ -838,6 +848,10 @@ function createBridgeServer(options = {}) {
         logger.info({ msg: 'bridge.system.reboot.request', host: rebootHost, user: rebootUser, keyPath: rebootKeyPath });
         process.stderr.write('\n[REBOOT] Attempting reboot of ' + rebootUser + '@' + rebootHost + ' via key ' + rebootKeyPath + '\n');
 
+        // Set rebootState immediately so the UI label locks to REBOOTING before
+        // any regular poll can fire and overwrite it.
+        setRebootState('rebooting');
+
         let privateKey;
         try {
           privateKey = fs.readFileSync(rebootKeyPath);
@@ -845,6 +859,7 @@ function createBridgeServer(options = {}) {
           const msg = 'Cannot read SSH key at ' + rebootKeyPath + ': ' + keyErr.message;
           process.stderr.write('[REBOOT] KEY ERROR: ' + msg + '\n\n');
           logger.error({ msg: 'bridge.system.reboot.key_error', keyPath: rebootKeyPath, err: keyErr.message });
+          setRebootState(null); // SSH failed — clear the lock
           return json(res, 500, { error: 'reboot_failed', message: msg });
         }
 
@@ -922,6 +937,7 @@ function createBridgeServer(options = {}) {
         } catch (err) {
           process.stderr.write('[REBOOT] FAILED: ' + err.message + '\n\n');
           logger.error({ msg: 'bridge.system.reboot.failed', err: err.message, host: rebootHost });
+          setRebootState(null); // SSH failed — clear the lock so UI recovers
           return json(res, 500, { error: 'reboot_failed', message: err.message });
         }
       }
