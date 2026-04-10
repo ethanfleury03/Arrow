@@ -4950,11 +4950,18 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
   state.liveStatus.deviceOfflineReason = bridgeReportsOffline ? (status.errorCategory || 'unknown') : null;
   if (bridgeReportsOffline) {
     state.liveStatus.engineStateRawLabel = 'OFFLINE';
+    if (!wasOffline) {
+      console.log('[status] Device went OFFLINE (connected:false from bridge, errorCategory:', status.errorCategory, ')');
+    }
+  } else if (wasOffline) {
+    console.log('[status] Device back ONLINE (connected:', status.connected, ')');
   }
 
   // Device came back online after a reboot — auto-initialise
   if (wasOffline && !bridgeReportsOffline && state.rebootPending) {
+    console.log('[auto-init] Reboot complete — device back online, scheduling initialise');
     state.rebootPending = false;
+    persistState();
     scheduleAutoInitialise();
   }
 
@@ -5133,12 +5140,22 @@ function startStatusPolling() {
         }
 
         if (type === 'update') {
-          if (pollTimer) {
-            clearInterval(pollTimer);
-            pollTimer = null;
-            log('Fallback polling stopped after SSE update.');
-          }
           const snapshot = payload || {};
+          const deviceIsOffline = snapshot.connected === false;
+
+          // Only stop fallback polling when device is confirmed online.
+          // When offline, keep polling so we catch the moment it comes back.
+          if (!deviceIsOffline) {
+            if (pollTimer) {
+              clearInterval(pollTimer);
+              pollTimer = null;
+              log('Fallback polling stopped after SSE update (device online).');
+            }
+          } else {
+            log('[offline] Device reported offline via SSE — keeping/starting fallback poll to detect reconnect.');
+            ensureFallbackPolling('device offline');
+          }
+
           applyLiveStatus(snapshot, { channel: 'status-sse' });
 
           const missingInk = !snapshot?.inkLevels || Object.values(snapshot.inkLevels || {}).every(v => Number(v) === 0);
@@ -5867,6 +5884,8 @@ function bind() {
       console.log('[reboot] response', res.status, data);
       if (res.ok) {
         state.rebootPending = true;
+        persistState();
+        console.log('[reboot] rebootPending=true, watching for offline→online transition for auto-init');
         if (txtSpan) txtSpan.textContent = 'Sent \u2713';
         if (iconSpan) iconSpan.textContent = '\u2713';
         setTimeout(() => {

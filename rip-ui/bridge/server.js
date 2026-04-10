@@ -344,6 +344,13 @@ function createBridgeServer(options = {}) {
 
       if (signature !== lastStatusSignature) {
         lastStatusSignature = signature;
+        if (!snapshot.connected) {
+          process.stderr.write('\n[STATUS] Device OFFLINE — emitting connected:false to UI\n\n');
+          logger.warn({ msg: 'bridge.status.device_offline', engineState: snapshot.engineState, degraded: snapshot.degraded });
+        } else if (snapshot.connected) {
+          process.stderr.write('\n[STATUS] Device ONLINE — emitting connected:true to UI\n\n');
+          logger.info({ msg: 'bridge.status.device_online', engineState: snapshot.engineState });
+        }
         emitSystemState(snapshot);
 
         // Persist device status snapshot to DB (throttled to on-change)
