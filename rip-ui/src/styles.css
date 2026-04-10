@@ -1625,6 +1625,16 @@ th { color: #7c121f; font-weight: 700; }
   letter-spacing: 0.03em;
 }
 
+.system-state-value[data-offline='true'] {
+  color: var(--brand-red);
+  animation: offline-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes offline-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
 .ink-values-card {
   padding-bottom: 10px;
 }

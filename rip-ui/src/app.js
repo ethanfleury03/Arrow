@@ -75,6 +75,8 @@ const INITIAL_STATE = {
     lastUpdate: null,
     source: 'bridge-http',
     running: false,
+    deviceOffline: false,
+    deviceOfflineReason: null,
     inkLevels: { C: 0, M: 0, Y: 0, K: 0 },
     inkSource: 'none',
     capabilities: {
@@ -2054,6 +2056,8 @@ function tryAutoDispatchNextJob(source = 'auto-send') {
 }
 
 function resolveGlobalOnlineState() {
+  // Device is explicitly offline (SSH connection refused, rebooting, etc.)
+  if (state.liveStatus?.deviceOffline) return false;
   // Operator rule: if status polling is running, system is considered online.
   if (state.liveStatus?.running) return true;
 
@@ -2252,9 +2256,14 @@ function render() {
 
   const systemStateValueEl = document.getElementById('systemStateValue');
   if (systemStateValueEl) {
+    const offline = state.liveStatus.deviceOffline;
     const rawEngineState = String(state.liveStatus?.engineStateRawLabel || '').trim().toUpperCase();
     const canonicalState = String(state.liveStatus?.engineState || '').trim().toUpperCase();
     systemStateValueEl.textContent = rawEngineState || canonicalState || 'UNKNOWN';
+    systemStateValueEl.dataset.offline = offline ? 'true' : 'false';
+    systemStateValueEl.title = offline
+      ? ('Device offline \u2014 ' + (state.liveStatus.deviceOfflineReason || 'connection refused'))
+      : '';
   }
 
   const ink = state.liveStatus?.inkLevels || { C: 0, M: 0, Y: 0, K: 0 };
@@ -4908,6 +4917,14 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
   state.liveStatus.lastUpdate = mapped.timestamp;
   state.liveStatus.source = mapped.source;
   state.liveStatus.streamConnected = true;
+
+  // Bridge explicitly reports connected:false when SSH/device is unreachable
+  const bridgeReportsOffline = status.connected === false;
+  state.liveStatus.deviceOffline = bridgeReportsOffline;
+  state.liveStatus.deviceOfflineReason = bridgeReportsOffline ? (status.errorCategory || 'unknown') : null;
+  if (bridgeReportsOffline) {
+    state.liveStatus.engineStateRawLabel = 'OFFLINE';
+  }
 
   // Evidence-based job completion detection
   // Only mark jobs as completed when engine returns to idle/ready AFTER being in a printing state
