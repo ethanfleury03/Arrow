@@ -294,7 +294,7 @@ def submit_board_job(request: BoardJobRequest) -> Dict[str, Any]:
         env=request.env
     )
 
-    entry = {
+    entry: Dict[str, Any] = {
         "id": job_id,
         "status": "queued",
         "created_at": now,
@@ -333,7 +333,7 @@ def submit_board_job(request: BoardJobRequest) -> Dict[str, Any]:
 def submit_job(request: JobRequest) -> Dict[str, Any]:
     job_id = str(uuid.uuid4())
     now = _utc_now()
-    entry = {
+    entry: Dict[str, Any] = {
         "id": job_id,
         "status": "queued",
         "created_at": now,

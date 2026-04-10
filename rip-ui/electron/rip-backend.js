@@ -274,8 +274,8 @@ class BridgeHttpAdapter {
           );
         }
 
-        // Map 5xx errors appropriately: 5xx = internal error, not unavailable
-        const isServerError = response.status >= 500 && response.status < 600;
+        // 503 = Service Unavailable → BRIDGE_UNAVAILABLE; other 5xx → BRIDGE_INTERNAL_ERROR
+        const isServerError = response.status >= 500 && response.status < 600 && response.status !== 503;
         const errorCode = isServerError ? 'BRIDGE_INTERNAL_ERROR' : 'BRIDGE_UNAVAILABLE';
         const remediation = isServerError
           ? `Backend service returned HTTP ${response.status}. Check bridge logs for internal errors.`

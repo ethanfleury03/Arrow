@@ -58,6 +58,7 @@ jobs:
   # Excluded (require build artifacts that only exist after a Windows build):
   #   release:manifest, handoff:bundle, test:handoff — need dist/RELEASE_MANIFEST.json
   #   test:ops, report:ops — assert all dist/ artifacts exist (snapshot.allPass)
+  #   guard:completion — final gate that checks RELEASE_MANIFEST + HANDOFF_BUNDLE exist
   rip-ui-reports:
     name: rip-ui — report generation
     runs-on: ubuntu-latest
@@ -78,8 +79,7 @@ jobs:
           npm run report:control &&
           npm run report:submitter &&
           npm run report:hookup &&
-          npm run report:config &&
-          npm run guard:completion
+          npm run report:config
 
   # ── rip-ui: Windows build + artifact upload ──────────────────────────────────
   rip-ui-build:
