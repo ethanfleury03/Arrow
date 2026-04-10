@@ -347,10 +347,10 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
   const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || ARROW_PES.sshUser).trim();
   const sshPassword = String(env.MEMJET_SSH_PASSWORD || env.RIP_SSH_PASSWORD || '').trim();
 
-  // Default SSH key path; override with MEMJET_SSH_KEY_PATH if your key differs
-  // On Windows, USERPROFILE is used to find the .ssh folder
+  // Default SSH key path — hardcoded to the Arrow rig Windows account for determinism.
+  // Override with MEMJET_SSH_KEY_PATH if your key is in a different location.
   const defaultUserKey = process.platform === 'win32'
-    ? path.join(env.USERPROFILE || 'C:\\Users\\Public', '.ssh', 'id_ed25519')
+    ? 'C:\\Users\\Arrow\\.ssh\\id_ed25519'
     : path.join(env.HOME || '', '.ssh', 'id_ed25519');
   const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || defaultUserKey).trim();
   const sshPort = Number(env.MEMJET_SSH_PORT || env.RIP_SSH_PORT || ARROW_PES.sshPort || 22);
