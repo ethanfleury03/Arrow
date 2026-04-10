@@ -322,16 +322,6 @@ h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.2px; }
 h2 { margin: 0 0 var(--space-2); font-size: 16px; font-weight: 700; letter-spacing: 0.2px; }
 h3 { margin: var(--space-2) 0 var(--space-1); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #4a4a4a; }
 
-#modeBadge {
-  font-size: 11px;
-  font-weight: 700;
-  color: #6e0c17;
-  background: linear-gradient(180deg, #fff4f6, #fbdfe4);
-  border: 1px solid #c76370;
-  border-radius: 999px;
-  padding: 6px 11px;
-  box-shadow: 0 0 0 1px rgba(196, 18, 38, 0.14) inset;
-}
 
 .workspace-shell {
   height: calc(100vh - 116px);
@@ -1635,33 +1625,6 @@ th { color: #7c121f; font-weight: 700; }
   50% { opacity: 0.45; }
 }
 
-.auto-init-banner {
-  margin-top: 8px;
-  padding: 5px 10px;
-  border-radius: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-}
-
-.auto-init-banner[data-status='pending'],
-.auto-init-banner[data-status='running'] {
-  background: #fef3c7;
-  color: #92400e;
-  border: 1px solid #fcd34d;
-}
-
-.auto-init-banner[data-status='done'] {
-  background: #dcfce7;
-  color: #166534;
-  border: 1px solid #86efac;
-}
-
-.auto-init-banner[data-status='failed'] {
-  background: var(--brand-red-soft);
-  color: var(--brand-red-strong);
-  border: 1px solid var(--brand-red);
-}
 
 .ink-values-card {
   padding-bottom: 10px;

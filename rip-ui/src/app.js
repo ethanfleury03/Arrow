@@ -2230,13 +2230,6 @@ function render() {
   const configEl = document.getElementById('configPreview');
   if (configEl) configEl.textContent = JSON.stringify(state.config, null, 2);
 
-  const modeBadge = document.getElementById('modeBadge');
-  if (modeBadge) {
-    const liveMode = state.liveStatus.source === 'bridge-http';
-    const modeLabel = liveMode ? 'LIVE MODE (HTTP BRIDGE)' : 'LIVE BACKEND DOWN';
-    const lock = isDiscoveryReadOnlyMode() ? ' · DISCOVERY-LOCK' : '';
-    modeBadge.textContent = `${modeLabel}${lock} · ${state.config.operatorProfile} · ${state.config.host}:${state.config.commandPort}`;
-  }
 
   const liveStatusEl = document.getElementById('liveStatusCards');
   if (liveStatusEl) {
@@ -2266,30 +2259,6 @@ function render() {
       : '';
   }
 
-  const autoInitBanner = document.getElementById('autoInitBanner');
-  if (autoInitBanner) {
-    const s = state.liveStatus.autoInitStatus;
-    if (s === 'pending') {
-      autoInitBanner.textContent = '\u231B Rebooting\u2026 auto-initialise will run in ~1 minute';
-      autoInitBanner.dataset.status = 'pending';
-      autoInitBanner.hidden = false;
-    } else if (s === 'running') {
-      autoInitBanner.textContent = '\u21BB Machine back \u2014 sending engine_initialise\u2026';
-      autoInitBanner.dataset.status = 'running';
-      autoInitBanner.hidden = false;
-    } else if (s === 'done') {
-      autoInitBanner.textContent = '\u2713 Machine back online \u2014 engine_initialise sent';
-      autoInitBanner.dataset.status = 'done';
-      autoInitBanner.hidden = false;
-    } else if (s === 'failed') {
-      autoInitBanner.textContent = '\u26A0 Auto-initialise failed \u2014 use Initialise button manually';
-      autoInitBanner.dataset.status = 'failed';
-      autoInitBanner.hidden = false;
-    } else {
-      autoInitBanner.hidden = true;
-    }
-  }
-
   const ink = state.liveStatus?.inkLevels || { C: 0, M: 0, Y: 0, K: 0 };
   ['C', 'M', 'Y', 'K'].forEach(channel => {
     const pct = Math.max(0, Math.min(100, Number(ink[channel]) || 0));
@@ -2304,14 +2273,6 @@ function render() {
     }
   });
 
-  const simBadge = document.getElementById('simulationBadge');
-  if (simBadge) {
-    const bridgeOnline = state.liveStatus.source === 'bridge-http' && !String(state.liveStatus.engineState || '').startsWith('DOWN');
-    const base = bridgeOnline ? 'LIVE BACKEND (HTTP BRIDGE)' : 'LIVE BACKEND DOWN';
-    const bridgeState = getBridgeHealth().label;
-    const lock = isDiscoveryReadOnlyMode() ? ' · DISCOVERY LOCK' : '';
-    simBadge.textContent = `${base} · ${bridgeState}${lock}`;
-  }
 
   const discoveryToggle = document.getElementById('btnToggleDiscoveryMode');
   if (discoveryToggle) {
@@ -4961,21 +4922,6 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
     }
   } else if (wasOffline && !bridgeReportsOffline) {
     console.log('[status] Device back ONLINE (connected:', status.connected, ')');
-    // Clear banner when reboot is fully done (rebootState null + machine online)
-    if (!status.rebootState) {
-      if (state.liveStatus.autoInitStatus === 'pending' || state.liveStatus.autoInitStatus === 'running') {
-        state.liveStatus.autoInitStatus = 'done';
-        setTimeout(() => { state.liveStatus.autoInitStatus = null; render(); }, 5000);
-      }
-    }
-  }
-
-  // Keep banner in sync with bridge rebootState
-  if (status.rebootState === 'initialising' && state.liveStatus.autoInitStatus !== 'done') {
-    state.liveStatus.autoInitStatus = 'running';
-  } else if (!status.rebootState && state.liveStatus.autoInitStatus === 'running') {
-    state.liveStatus.autoInitStatus = 'done';
-    setTimeout(() => { state.liveStatus.autoInitStatus = null; render(); }, 5000);
   }
 
   // Evidence-based job completion detection
@@ -5863,7 +5809,6 @@ function bind() {
       if (res.ok) {
         // Optimistic label while first SSE with rebootState:'rebooting' arrives (~1s)
         state.liveStatus.engineStateRawLabel = 'REBOOTING';
-        state.liveStatus.autoInitStatus = 'pending';
         render();
         console.log('[reboot] Command sent — bridge is now the source of truth via rebootState');
         if (txtSpan) txtSpan.textContent = 'Sent \u2713';

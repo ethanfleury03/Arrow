@@ -294,7 +294,7 @@ function createBridgeServer(options = {}) {
     }
     rebootWatcherActive = true;
 
-    const SAFETY_HOLD_MS = 60000;
+    const SAFETY_HOLD_MS = 120000;
     const SSH_POLL_INTERVAL_MS = 3000;
     const MAX_SSH_ATTEMPTS = 60; // 3 more minutes after the hold
     const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
