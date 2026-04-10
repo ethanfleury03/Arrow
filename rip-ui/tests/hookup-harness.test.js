@@ -124,6 +124,12 @@ function createHarness() {
       },
       createElement(tag) {
         return new Element(tag);
+      },
+      querySelector(selector) {
+        return new Element(selector);
+      },
+      querySelectorAll() {
+        return [];
       }
     },
     localStorage: {
