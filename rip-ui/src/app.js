@@ -2270,7 +2270,7 @@ function render() {
   if (autoInitBanner) {
     const s = state.liveStatus.autoInitStatus;
     if (s === 'pending') {
-      autoInitBanner.textContent = '\u231B Rebooting\u2026 waiting for machine to come back';
+      autoInitBanner.textContent = '\u231B Rebooting\u2026 auto-initialise will run in ~1 minute';
       autoInitBanner.dataset.status = 'pending';
       autoInitBanner.hidden = false;
     } else if (s === 'running') {

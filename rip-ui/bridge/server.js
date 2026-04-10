@@ -285,8 +285,10 @@ function createBridgeServer(options = {}) {
     const MAX_ATTEMPTS = 60; // 3 minutes at ~3s per attempt
     let attempts = 0;
 
-    process.stderr.write('\n[REBOOT] Watching for ' + sshHost + ' to come back (SSH ping every 3s, max 3min)...\n');
-    logger.info({ msg: 'bridge.system.reboot.watch_start', host: sshHost });
+    const SAFETY_HOLD_MS = 60000; // 60s — machine needs full reboot cycle before PES is ready
+    const resumeAt = new Date(Date.now() + SAFETY_HOLD_MS).toISOString();
+    process.stderr.write('\n[REBOOT] 60s safety hold — will start polling at ' + resumeAt + '\n');
+    logger.info({ msg: 'bridge.system.reboot.watch_start', host: sshHost, resumeAt });
 
     const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
@@ -294,7 +296,7 @@ function createBridgeServer(options = {}) {
       if (!rebootWatcherActive) return;
       if (attempts >= MAX_ATTEMPTS) {
         rebootWatcherActive = false;
-        process.stderr.write('\n[REBOOT] Watch timed out — ' + sshHost + ' did not come back within 3 minutes\n\n');
+        process.stderr.write('\n[REBOOT] Watch timed out — ' + sshHost + ' did not come back within 3 minutes after the safety hold\n\n');
         logger.error({ msg: 'bridge.system.reboot.watch_timeout', host: sshHost, attempts });
         return;
       }
@@ -316,13 +318,10 @@ function createBridgeServer(options = {}) {
       try {
         await execFileAsync(sshBin, pingArgs, { timeout: 8000, maxBuffer: 4096 });
 
-        // SSH succeeded — machine is back
+        // SSH succeeded — machine is fully back (60s hold means PES is ready)
         rebootWatcherActive = false;
-        process.stderr.write('\n[REBOOT] ' + sshHost + ' is back online (attempt ' + attempts + ')\n');
+        process.stderr.write('\n[REBOOT] ' + sshHost + ' is back online (attempt ' + attempts + ' after 60s hold)\n');
         logger.info({ msg: 'bridge.system.reboot.machine_back', host: sshHost, attempts });
-
-        // Brief pause to let the PES service finish starting up
-        await new Promise(r => setTimeout(r, 3000));
 
         process.stderr.write('[REBOOT] Sending engine_initialise...\n');
         logger.info({ msg: 'bridge.system.reboot.initialise_start', host: sshHost });
@@ -341,8 +340,8 @@ function createBridgeServer(options = {}) {
       }
     }
 
-    // Wait 5s before first attempt (give machine time to start shutting down)
-    setTimeout(tryPing, 5000);
+    // Start polling only after the 60s safety hold
+    setTimeout(tryPing, SAFETY_HOLD_MS);
   }
   // ────────────────────────────────────────────────────────────────────────────
 
