@@ -5765,27 +5765,44 @@ function bind() {
   bindClick('btnFinishPrinting', () => executeCommand('print_finish'));
   bindClick('btnReboot', async () => {
     const btn = document.getElementById('btnReboot');
-    if (!btn) return;
-    const confirmed = window.confirm('Send reboot command to duraflex@192.168.100.200?\n\nThe machine will restart immediately.');
-    if (!confirmed) return;
-    btn.disabled = true;
+    if (!btn || btn.disabled) return;
+    if (!window.confirm('Send reboot command to duraflex@192.168.100.200?\n\nThe machine will restart immediately.')) return;
+
     const txtSpan = btn.querySelector('.reboot-text');
+    const iconSpan = btn.querySelector('.reboot-icon');
+    btn.disabled = true;
     if (txtSpan) txtSpan.textContent = 'Rebooting\u2026';
+
+    const bridgeBase = String((state && state.config && state.config.bridgeBaseUrl) || 'http://127.0.0.1:8787').replace(/\/$/, '');
+    const url = bridgeBase + '/api/system/reboot';
+    console.log('[reboot] POST', url);
+
     try {
-      const bridgeBase = String(state.config?.bridgeBaseUrl || 'http://127.0.0.1:8787').replace(/\/$/, '');
-      const res = await fetch(`${bridgeBase}/api/system/reboot`, { method: 'POST' });
-      const data = await res.json();
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      const data = await res.json().catch(() => ({}));
+      console.log('[reboot] response', res.status, data);
       if (res.ok) {
-        window.alert('Reboot command sent. The machine is restarting.');
+        if (txtSpan) txtSpan.textContent = 'Sent \u2713';
+        if (iconSpan) iconSpan.textContent = '\u2713';
+        setTimeout(() => {
+          if (txtSpan) txtSpan.textContent = 'Reboot';
+          if (iconSpan) iconSpan.textContent = '\u21BA';
+          btn.disabled = false;
+        }, 4000);
       } else {
-        window.alert('Reboot failed: ' + (data.message || data.error || 'Unknown error'));
+        const msg = (data && (data.message || data.error)) || ('HTTP ' + res.status);
+        console.error('[reboot] FAILED:', msg);
+        window.alert('Reboot failed: ' + msg);
+        if (txtSpan) txtSpan.textContent = 'Reboot';
+        if (iconSpan) iconSpan.textContent = '\u21BA';
+        btn.disabled = false;
       }
     } catch (err) {
+      console.error('[reboot] fetch error:', err);
       window.alert('Reboot error: ' + err.message);
-    } finally {
+      if (txtSpan) txtSpan.textContent = 'Reboot';
+      if (iconSpan) iconSpan.textContent = '\u21BA';
       btn.disabled = false;
-      const txt = btn.querySelector('.reboot-text');
-      if (txt) txt.textContent = 'Reboot';
     }
   });
   bindClick('btnToggleDiscoveryMode', toggleDiscoveryMode);

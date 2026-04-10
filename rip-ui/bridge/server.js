@@ -682,29 +682,62 @@ function createBridgeServer(options = {}) {
       }
 
       if (req.method === 'POST' && url.pathname === '/api/system/reboot') {
+        // Log immediately so we always see the request arrive, regardless of what SSH does
+        logger.info({ msg: 'bridge.system.reboot.request', host: '192.168.100.200', user: 'duraflex' });
         try {
           await new Promise((resolve, reject) => {
+            let settled = false;
+            const settle = (fn, val) => {
+              if (settled) return;
+              settled = true;
+              fn(val);
+            };
+
             const conn = new SshClient();
+
             conn.on('ready', () => {
+              logger.info({ msg: 'bridge.system.reboot.ssh_ready' });
               conn.exec('sudo reboot', (err, stream) => {
-                if (err) { conn.end(); return reject(err); }
-                stream.on('close', () => { conn.end(); resolve(); });
+                if (err) {
+                  try { conn.end(); } catch {}
+                  return settle(reject, err);
+                }
+                // Resolve as soon as the command is handed off to the remote shell.
+                // sudo reboot kills the SSH session before the stream can close cleanly —
+                // waiting for stream 'close' here would hang indefinitely.
+                logger.info({ msg: 'bridge.system.reboot.command_sent' });
+                settle(resolve, undefined);
                 stream.on('data', () => {});
                 stream.stderr.on('data', () => {});
+                stream.on('close', () => { try { conn.end(); } catch {} });
               });
             });
-            conn.on('error', reject);
+
+            conn.on('error', (err) => {
+              if (!settled) {
+                // Genuine connection failure before the command was sent
+                logger.error({ msg: 'bridge.system.reboot.ssh_error', err: err.message });
+                settle(reject, err);
+              } else {
+                // Connection dropped after command was sent — this is expected,
+                // the machine is rebooting and the SSH session was forcibly closed
+                logger.info({ msg: 'bridge.system.reboot.conn_dropped_after_reboot', err: err.message });
+              }
+            });
+
             conn.connect({
               host: '192.168.100.200',
               port: 22,
               username: 'duraflex',
               password: 'duraflex',
-              readyTimeout: 8000
+              readyTimeout: 10000
             });
           });
-          return json(res, 200, { ok: true, message: 'Reboot command sent' });
+
+          logger.info({ msg: 'bridge.system.reboot.ok', host: '192.168.100.200' });
+          return json(res, 200, { ok: true, message: 'Reboot command sent to 192.168.100.200' });
         } catch (err) {
-          logger.error({ msg: 'bridge.system.reboot.error', err: err.message });
+          logger.error({ msg: 'bridge.system.reboot.failed', err: err.message, host: '192.168.100.200' });
           return json(res, 500, { error: 'reboot_failed', message: err.message });
         }
       }
