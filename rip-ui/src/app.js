@@ -5801,12 +5801,15 @@ function bind() {
   bindClick('btnReboot', async () => {
     const btn = document.getElementById('btnReboot');
     if (!btn || btn.disabled) return;
-    if (!window.confirm('Send reboot command to duraflex@192.168.100.200?\n\nThe machine will restart immediately.')) return;
+    if (!window.confirm(
+      'Shut down the engine (printhead status will show live SHUTTING_DOWN/OFF), wait for OFF, then reboot the host?\n\n'
+      + 'This can take a few minutes — do not close the app.'
+    )) return;
 
     const txtSpan = btn.querySelector('.reboot-text');
     const iconSpan = btn.querySelector('.reboot-icon');
     btn.disabled = true;
-    if (txtSpan) txtSpan.textContent = 'Rebooting\u2026';
+    if (txtSpan) txtSpan.textContent = 'Shut down / reboot\u2026';
 
     const bridgeBase = String((state && state.config && state.config.bridgeBaseUrl) || 'http://127.0.0.1:8787').replace(/\/$/, '');
     const url = bridgeBase + '/api/system/reboot';
@@ -5817,11 +5820,9 @@ function bind() {
       const data = await res.json().catch(() => ({}));
       console.log('[reboot] response', res.status, data);
       if (res.ok) {
-        // Optimistic phase until SSE/HTTP reflects bridge rebootState
-        state.liveStatus.rebootState = 'rebooting';
-        state.liveStatus.engineStateRawLabel = 'REBOOTING';
+        // During engine_shutdown+wait OFF, rebootState is null — live printhead status drives the label.
         render();
-        console.log('[reboot] Command sent — bridge is now the source of truth via rebootState');
+        console.log('[reboot] Host reboot handed off — bridge rebootState + SSE for recovery phases');
         if (txtSpan) txtSpan.textContent = 'Sent \u2713';
         if (iconSpan) iconSpan.textContent = '\u2713';
         setTimeout(() => {

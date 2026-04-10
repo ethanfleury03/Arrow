@@ -272,6 +272,7 @@ function createBridgeServer(options = {}) {
 
   // ── Reboot state — single source of truth for the UI ────────────────────────
   // null | 'rebooting' | 'polling' | 'initialising'
+  // SHUTTING_DOWN etc. come from live printhead status only (no synthetic rebootState).
   // Injected into every SSE emission so the UI never has to guess.
   let rebootState = null;
 
@@ -562,6 +563,23 @@ function createBridgeServer(options = {}) {
     }
   }
 
+  function resolvedEngineUpperFromStatus(status) {
+    const resolved = resolveEngineState(status || {});
+    return String(resolved.rawLabel || resolved.canonical || '').toUpperCase();
+  }
+
+  /** Poll until printhead reports OFF (after engine_shutdown). Live SSE shows SHUTTING_DOWN/OFF from device. */
+  async function waitForEngineOff({ deadlineMs = 180000, pollMs = 1000 } = {}) {
+    const deadline = Date.now() + deadlineMs;
+    while (Date.now() < deadline) {
+      await pollSystemState();
+      const label = resolvedEngineUpperFromStatus(latestRawDeviceStatus);
+      if (label === 'OFF' || label === '0') return true;
+      await new Promise(r => setTimeout(r, pollMs));
+    }
+    return false;
+  }
+
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
@@ -848,11 +866,9 @@ function createBridgeServer(options = {}) {
         const rebootPort = rebootSshSettings.sshPort || 22;
 
         logger.info({ msg: 'bridge.system.reboot.request', host: rebootHost, user: rebootUser, keyPath: rebootKeyPath });
-        process.stderr.write('\n[REBOOT] Attempting reboot of ' + rebootUser + '@' + rebootHost + ' via key ' + rebootKeyPath + '\n');
-
-        // Set rebootState immediately so the UI label locks to REBOOTING before
-        // any regular poll can fire and overwrite it.
-        setRebootState('rebooting');
+        process.stderr.write(
+          `\n[REBOOT] Graceful reboot: engine_shutdown → wait OFF (live printhead) → sudo reboot — ${rebootUser}@${rebootHost}\n`
+        );
 
         let privateKey;
         try {
@@ -861,11 +877,35 @@ function createBridgeServer(options = {}) {
           const msg = 'Cannot read SSH key at ' + rebootKeyPath + ': ' + keyErr.message;
           process.stderr.write('[REBOOT] KEY ERROR: ' + msg + '\n\n');
           logger.error({ msg: 'bridge.system.reboot.key_error', keyPath: rebootKeyPath, err: keyErr.message });
-          setRebootState(null); // SSH failed — clear the lock
           return json(res, 500, { error: 'reboot_failed', message: msg });
         }
 
         try {
+          await pollSystemState();
+          const beforeLabel = resolvedEngineUpperFromStatus(latestRawDeviceStatus);
+          if (beforeLabel !== 'OFF' && beforeLabel !== '0') {
+            process.stderr.write('[REBOOT] engine_shutdown — UI follows printhead (e.g. SHUTTING_DOWN → OFF)\n');
+            logger.info({ msg: 'bridge.system.reboot.shutdown_start', host: rebootHost });
+            await adapter.shutdownEngine({});
+          } else {
+            process.stderr.write('[REBOOT] Already OFF — skipping engine_shutdown\n');
+            logger.info({ msg: 'bridge.system.reboot.skip_shutdown_already_off', host: rebootHost });
+          }
+
+          const offOk = await waitForEngineOff({ deadlineMs: 180000, pollMs: 1000 });
+          if (!offOk) {
+            process.stderr.write('[REBOOT] FAILED: engine did not reach OFF within 3 min\n\n');
+            logger.error({ msg: 'bridge.system.reboot.off_timeout', host: rebootHost });
+            return json(res, 500, {
+              error: 'shutdown_off_timeout',
+              message: 'Engine did not reach OFF within 3 minutes after shutdown. Host was not rebooted.'
+            });
+          }
+          process.stderr.write('[REBOOT] OFF confirmed — host reboot phase (rebootState=rebooting)\n');
+          logger.info({ msg: 'bridge.system.reboot.off_confirmed', host: rebootHost });
+
+          setRebootState('rebooting');
+
           await new Promise((resolve, reject) => {
             let settled = false;
             const settle = (fn, val) => {
