@@ -1,5 +1,6 @@
 const http = require('node:http');
 const { URL } = require('node:url');
+const fs = require('node:fs');
 const { loadBridgeConfig } = require('./config');
 const { createLogger } = require('./logger');
 const { createMemjetAdapter, AdapterCapabilityError } = require('./memjet-adapter');
@@ -682,8 +683,31 @@ function createBridgeServer(options = {}) {
       }
 
       if (req.method === 'POST' && url.pathname === '/api/system/reboot') {
-        // Log immediately so we always see the request arrive, regardless of what SSH does
-        logger.info({ msg: 'bridge.system.reboot.request', host: '192.168.100.200', user: 'duraflex' });
+        // Resolve the same SSH settings the bridge already uses (root + private key)
+        const rebootSshSettings = buildSshSettings({
+          host: config?.memjet?.host,
+          commandPort: config?.memjet?.commandPort,
+          eventPort: config?.memjet?.eventPort,
+          dataPort: config?.memjet?.dataPort
+        });
+        const rebootHost = rebootSshSettings.sshHost || '192.168.100.200';
+        const rebootUser = rebootSshSettings.sshUser || 'root';
+        const rebootKeyPath = rebootSshSettings.sshKeyPath;
+        const rebootPort = rebootSshSettings.sshPort || 22;
+
+        logger.info({ msg: 'bridge.system.reboot.request', host: rebootHost, user: rebootUser, keyPath: rebootKeyPath });
+        process.stderr.write('\n[REBOOT] Attempting reboot of ' + rebootUser + '@' + rebootHost + ' via key ' + rebootKeyPath + '\n');
+
+        let privateKey;
+        try {
+          privateKey = fs.readFileSync(rebootKeyPath);
+        } catch (keyErr) {
+          const msg = 'Cannot read SSH key at ' + rebootKeyPath + ': ' + keyErr.message;
+          process.stderr.write('[REBOOT] KEY ERROR: ' + msg + '\n\n');
+          logger.error({ msg: 'bridge.system.reboot.key_error', keyPath: rebootKeyPath, err: keyErr.message });
+          return json(res, 500, { error: 'reboot_failed', message: msg });
+        }
+
         try {
           await new Promise((resolve, reject) => {
             let settled = false;
@@ -696,7 +720,7 @@ function createBridgeServer(options = {}) {
             const conn = new SshClient();
 
             conn.on('ready', () => {
-              logger.info({ msg: 'bridge.system.reboot.ssh_ready' });
+              logger.info({ msg: 'bridge.system.reboot.ssh_ready', host: rebootHost, user: rebootUser });
               conn.exec('sudo reboot', (err, stream) => {
                 if (err) {
                   try { conn.end(); } catch {}
@@ -705,7 +729,7 @@ function createBridgeServer(options = {}) {
                 // Resolve as soon as the command is handed off to the remote shell.
                 // sudo reboot kills the SSH session before the stream can close cleanly —
                 // waiting for stream 'close' here would hang indefinitely.
-                logger.info({ msg: 'bridge.system.reboot.command_sent' });
+                logger.info({ msg: 'bridge.system.reboot.command_sent', host: rebootHost });
                 settle(resolve, undefined);
                 stream.on('data', () => {});
                 stream.stderr.on('data', () => {});
@@ -715,29 +739,39 @@ function createBridgeServer(options = {}) {
 
             conn.on('error', (err) => {
               if (!settled) {
-                // Genuine connection failure before the command was sent
-                logger.error({ msg: 'bridge.system.reboot.ssh_error', err: err.message });
+                const isAuthFail = /auth|permission denied|handshake/i.test(err.message);
+                logger.error({ msg: 'bridge.system.reboot.ssh_error', err: err.message, authFailure: isAuthFail, host: rebootHost, user: rebootUser });
+                if (isAuthFail) {
+                  process.stderr.write(
+                    '[REBOOT] SSH AUTH FAILED for ' + rebootUser + '@' + rebootHost + '\n' +
+                    '[REBOOT] Key path used: ' + rebootKeyPath + '\n' +
+                    '[REBOOT] Raw error: ' + err.message + '\n\n'
+                  );
+                } else {
+                  process.stderr.write('[REBOOT] SSH connection error: ' + err.message + '\n\n');
+                }
                 settle(reject, err);
               } else {
-                // Connection dropped after command was sent — this is expected,
-                // the machine is rebooting and the SSH session was forcibly closed
+                // Connection dropped after command was sent — expected, machine is rebooting
                 logger.info({ msg: 'bridge.system.reboot.conn_dropped_after_reboot', err: err.message });
               }
             });
 
             conn.connect({
-              host: '192.168.100.200',
-              port: 22,
-              username: 'duraflex',
-              password: 'duraflex',
+              host: rebootHost,
+              port: rebootPort,
+              username: rebootUser,
+              privateKey,
               readyTimeout: 10000
             });
           });
 
-          logger.info({ msg: 'bridge.system.reboot.ok', host: '192.168.100.200' });
-          return json(res, 200, { ok: true, message: 'Reboot command sent to 192.168.100.200' });
+          process.stderr.write('[REBOOT] Command sent successfully — ' + rebootHost + ' is rebooting.\n\n');
+          logger.info({ msg: 'bridge.system.reboot.ok', host: rebootHost });
+          return json(res, 200, { ok: true, message: 'Reboot command sent to ' + rebootHost });
         } catch (err) {
-          logger.error({ msg: 'bridge.system.reboot.failed', err: err.message, host: '192.168.100.200' });
+          process.stderr.write('[REBOOT] FAILED: ' + err.message + '\n\n');
+          logger.error({ msg: 'bridge.system.reboot.failed', err: err.message, host: rebootHost });
           return json(res, 500, { error: 'reboot_failed', message: err.message });
         }
       }
