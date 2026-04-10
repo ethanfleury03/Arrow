@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -222,9 +222,6 @@ class BoardCompositor:
 
         # Apply rotation if needed
         if placement.rotation_degrees != 0:
-            # Rotate around the top-left corner of the destination
-            alpha = placement.rotation_degrees * (3.14159265 / 180)
-            cos_a = abs(1 if abs(placement.rotation_degrees % 360) == 0 else (1 if placement.rotation_degrees % 360 == 90 else (0 if placement.rotation_degrees % 360 == 180 else -1)))
             # Use PyMuPDF's built-in rotation
             rot_mat = fitz.Matrix(
                 fitz.cos(placement.rotation_degrees * (3.14159265 / 180)),

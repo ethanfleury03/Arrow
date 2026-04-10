@@ -24,6 +24,8 @@ jobs:
     defaults:
       run:
         working-directory: rip-ui
+    env:
+      MEMJET_REAL_BACKEND: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -53,8 +55,9 @@ jobs:
       - run: npm run test:board
 
   # ── rip-ui: report generation ───────────────────────────────────────────────
-  # release:manifest, handoff:bundle and test:handoff are excluded here — they all
-  # require dist/RELEASE_MANIFEST.json which only exists after a real Windows build.
+  # Excluded (require build artifacts that only exist after a Windows build):
+  #   release:manifest, handoff:bundle, test:handoff — need dist/RELEASE_MANIFEST.json
+  #   test:ops, report:ops — assert all dist/ artifacts exist (snapshot.allPass)
   rip-ui-reports:
     name: rip-ui — report generation
     runs-on: ubuntu-latest
@@ -75,8 +78,6 @@ jobs:
           npm run report:control &&
           npm run report:submitter &&
           npm run report:hookup &&
-          npm run test:ops &&
-          npm run report:ops &&
           npm run report:config &&
           npm run guard:completion
 
