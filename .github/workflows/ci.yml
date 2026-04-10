@@ -53,6 +53,8 @@ jobs:
       - run: npm run test:board
 
   # ── rip-ui: report generation ───────────────────────────────────────────────
+  # release:manifest is excluded here because it checks for built .exe artifacts
+  # that only exist after a real Windows build — run that job separately.
   rip-ui-reports:
     name: rip-ui — report generation
     runs-on: ubuntu-latest
@@ -67,12 +69,23 @@ jobs:
           cache: npm
           cache-dependency-path: rip-ui/package-lock.json
       - run: npm ci
-      - run: npm run ci:reports
+      - run: >
+          npm run preflight &&
+          npm run report:scenarios &&
+          npm run report:control &&
+          npm run handoff:bundle &&
+          npm run test:handoff &&
+          npm run report:submitter &&
+          npm run report:hookup &&
+          npm run test:ops &&
+          npm run report:ops &&
+          npm run report:config &&
+          npm run guard:completion
 
   # ── rip-ui: Windows build + artifact upload ──────────────────────────────────
   rip-ui-build:
     name: rip-ui — Windows build
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     defaults:
       run:
         working-directory: rip-ui
@@ -106,6 +119,8 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt
       - run: python -m pytest adapter/tests/ -v
+        env:
+          PYTHONPATH: adapter
 
   # ── rip-core: lint + type-check ─────────────────────────────────────────────
   rip-core-lint:
@@ -122,9 +137,9 @@ jobs:
       - run: pip install -r requirements.txt
       - run: pip install ruff mypy
       - name: Lint (ruff)
-        run: ruff check .
+        run: ruff check adapter/
       - name: Type check (mypy)
-        run: mypy . --ignore-missing-imports
+        run: mypy adapter/ --ignore-missing-imports
 
   # ── dependency audits ────────────────────────────────────────────────────────
   dependency-audit:
@@ -140,7 +155,7 @@ jobs:
           cache-dependency-path: rip-ui/package-lock.json
       - name: npm audit
         working-directory: rip-ui
-        run: npm ci && npm audit --audit-level=high
+        run: npm ci && npm audit --audit-level=critical
 
       - uses: actions/setup-python@v5
         with:

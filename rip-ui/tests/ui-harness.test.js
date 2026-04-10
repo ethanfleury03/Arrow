@@ -46,6 +46,9 @@ class Element {
     return child;
   }
 
+  addEventListener() {}
+  removeEventListener() {}
+
   set innerHTML(value) {
     this._innerHTML = value;
     if (this.id === 'controls') {
