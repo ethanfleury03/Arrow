@@ -2,12 +2,24 @@ name: Monorepo CI
 
 on:
   push:
-    branches: [main, chore/**, feat/**, fix/**]
+    branches:
+      - Duraflex/main
+      - Duracore/main
+      - main
+      - chore/**
+      - feat/**
+      - fix/**
+      - test/**
   pull_request:
-    branches: [main]
+    branches:
+      - Duraflex/main
+      - Duracore/main
+      - main
 
 jobs:
+  # ── rip-ui: full validation suite ───────────────────────────────────────────
   rip-ui:
+    name: rip-ui — lint + tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -22,7 +34,67 @@ jobs:
       - run: npm ci
       - run: npm run ci
 
+  # ── rip-ui: unit tests (app + board) ────────────────────────────────────────
+  rip-ui-unit:
+    name: rip-ui — unit tests (app + board)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rip-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: rip-ui/package-lock.json
+      - run: npm ci
+      - run: npm run test:app
+      - run: npm run test:board
+
+  # ── rip-ui: report generation ───────────────────────────────────────────────
+  rip-ui-reports:
+    name: rip-ui — report generation
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rip-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: rip-ui/package-lock.json
+      - run: npm ci
+      - run: npm run ci:reports
+
+  # ── rip-ui: Windows build + artifact upload ──────────────────────────────────
+  rip-ui-build:
+    name: rip-ui — Windows build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rip-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: rip-ui/package-lock.json
+      - run: npm ci
+      - run: npm run build:win
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: rip-ui-win-${{ github.sha }}
+          path: rip-ui/dist/*.exe
+          if-no-files-found: warn
+
+  # ── rip-core: pytest ────────────────────────────────────────────────────────
   rip-core-adapter:
+    name: rip-core — pytest
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -34,3 +106,45 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt
       - run: python -m pytest adapter/tests/ -v
+
+  # ── rip-core: lint + type-check ─────────────────────────────────────────────
+  rip-core-lint:
+    name: rip-core — ruff + mypy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rip-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: pip install ruff mypy
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Type check (mypy)
+        run: mypy . --ignore-missing-imports
+
+  # ── dependency audits ────────────────────────────────────────────────────────
+  dependency-audit:
+    name: Dependency audit (npm + pip)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: rip-ui/package-lock.json
+      - name: npm audit
+        working-directory: rip-ui
+        run: npm ci && npm audit --audit-level=high
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: pip-audit
+        working-directory: rip-core
+        run: pip install pip-audit && pip-audit -r requirements.txt
