@@ -270,9 +270,21 @@ function createBridgeServer(options = {}) {
     timestamp: new Date().toISOString()
   };
 
+  // ── Reboot state — single source of truth for the UI ────────────────────────
+  // null | 'rebooting' | 'polling' | 'initialising'
+  // Injected into every SSE emission so the UI never has to guess.
+  let rebootState = null;
+
+  function setRebootState(next) {
+    rebootState = next;
+    // Push immediately — don't wait for the next poll tick
+    emitSystemState(latestSystemState);
+    process.stderr.write('[REBOOT] rebootState → ' + (next || 'null') + '\n');
+    logger.info({ msg: 'bridge.system.reboot.state_change', rebootState: next });
+  }
+  // ────────────────────────────────────────────────────────────────────────────
+
   // ── Reboot recovery watcher ─────────────────────────────────────────────────
-  // After sudo reboot is sent, the bridge polls SSH until the machine responds,
-  // then fires engine_initialise automatically.
   let rebootWatcherActive = false;
 
   function startRebootWatcher({ sshBin, sshHost, sshUser, sshKeyPath, sshPort }) {
@@ -282,25 +294,39 @@ function createBridgeServer(options = {}) {
     }
     rebootWatcherActive = true;
 
-    const MAX_ATTEMPTS = 60; // 3 minutes at ~3s per attempt
-    let attempts = 0;
-
-    const SAFETY_HOLD_MS = 60000; // 60s — machine needs full reboot cycle before PES is ready
-    const resumeAt = new Date(Date.now() + SAFETY_HOLD_MS).toISOString();
-    process.stderr.write('\n[REBOOT] 60s safety hold — will start polling at ' + resumeAt + '\n');
-    logger.info({ msg: 'bridge.system.reboot.watch_start', host: sshHost, resumeAt });
-
+    const SAFETY_HOLD_MS = 60000;
+    const SSH_POLL_INTERVAL_MS = 3000;
+    const MAX_SSH_ATTEMPTS = 60; // 3 more minutes after the hold
     const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    let sshAttempts = 0;
+
+    // Phase 1 — broadcast REBOOTING and hold for 60s
+    setRebootState('rebooting');
+    const resumeAt = new Date(Date.now() + SAFETY_HOLD_MS).toISOString();
+    process.stderr.write('\n[REBOOT] 60s safety hold — polling starts at ' + resumeAt + '\n');
+    logger.info({ msg: 'bridge.system.reboot.hold_start', host: sshHost, resumeAt });
+
+    setTimeout(startPolling, SAFETY_HOLD_MS);
+
+    function startPolling() {
+      // Phase 2 — SSH ping loop
+      setRebootState('polling');
+      process.stderr.write('[REBOOT] 60s elapsed — polling SSH every 3s for ' + sshHost + '\n');
+      logger.info({ msg: 'bridge.system.reboot.polling_start', host: sshHost });
+      setTimeout(tryPing, SSH_POLL_INTERVAL_MS);
+    }
 
     async function tryPing() {
       if (!rebootWatcherActive) return;
-      if (attempts >= MAX_ATTEMPTS) {
+
+      if (sshAttempts >= MAX_SSH_ATTEMPTS) {
         rebootWatcherActive = false;
-        process.stderr.write('\n[REBOOT] Watch timed out — ' + sshHost + ' did not come back within 3 minutes after the safety hold\n\n');
-        logger.error({ msg: 'bridge.system.reboot.watch_timeout', host: sshHost, attempts });
+        setRebootState(null);
+        process.stderr.write('\n[REBOOT] Timed out — ' + sshHost + ' did not respond within 3min after hold\n\n');
+        logger.error({ msg: 'bridge.system.reboot.watch_timeout', host: sshHost, sshAttempts });
         return;
       }
-      attempts++;
+      sshAttempts++;
 
       const pingArgs = [
         '-F', nullDevice,
@@ -315,33 +341,60 @@ function createBridgeServer(options = {}) {
         'echo rip_ping_ok'
       ];
 
+      // SSH ping
       try {
         await execFileAsync(sshBin, pingArgs, { timeout: 8000, maxBuffer: 4096 });
-
-        // SSH succeeded — machine is fully back (60s hold means PES is ready)
-        rebootWatcherActive = false;
-        process.stderr.write('\n[REBOOT] ' + sshHost + ' is back online (attempt ' + attempts + ' after 60s hold)\n');
-        logger.info({ msg: 'bridge.system.reboot.machine_back', host: sshHost, attempts });
-
-        process.stderr.write('[REBOOT] Sending engine_initialise...\n');
-        logger.info({ msg: 'bridge.system.reboot.initialise_start', host: sshHost });
-
-        try {
-          await adapter.initialiseEngine({});
-          process.stderr.write('[REBOOT] engine_initialise sent OK\n\n');
-          logger.info({ msg: 'bridge.system.reboot.initialise_ok', host: sshHost });
-        } catch (initErr) {
-          process.stderr.write('[REBOOT] engine_initialise failed: ' + initErr.message + '\n\n');
-          logger.error({ msg: 'bridge.system.reboot.initialise_error', err: initErr.message, host: sshHost });
-        }
       } catch {
-        // Still offline — try again after 3s
-        setTimeout(tryPing, 3000);
+        // SSH not up yet — try again
+        setTimeout(tryPing, SSH_POLL_INTERVAL_MS);
+        return;
       }
-    }
 
-    // Start polling only after the 60s safety hold
-    setTimeout(tryPing, SAFETY_HOLD_MS);
+      // SSH is up — verify PES is in OFF state before initialising
+      process.stderr.write('[REBOOT] SSH up (attempt ' + sshAttempts + ') — checking engineState\n');
+      logger.info({ msg: 'bridge.system.reboot.ssh_up', host: sshHost, sshAttempts });
+
+      let engineState = null;
+      try {
+        const status = await manager.refreshDeviceStatus();
+        // resolveEngineState normalises numeric/string labels → canonical name
+        const resolved = resolveEngineState(status);
+        engineState = String(resolved.rawLabel || resolved.canonical || '').toUpperCase();
+        process.stderr.write('[REBOOT] getStatus → engineState=' + (engineState || 'unknown') + '\n');
+        logger.info({ msg: 'bridge.system.reboot.status_check', engineState, host: sshHost });
+      } catch (statusErr) {
+        // PES not answering yet — keep waiting
+        process.stderr.write('[REBOOT] getStatus failed (' + statusErr.message + ') — retrying\n');
+        setTimeout(tryPing, SSH_POLL_INTERVAL_MS);
+        return;
+      }
+
+      // Wait for OFF — the clean post-boot state before any initialisation
+      if (engineState !== 'OFF' && engineState !== '0') {
+        process.stderr.write('[REBOOT] engineState=' + engineState + ' (want OFF) — retrying\n');
+        setTimeout(tryPing, SSH_POLL_INTERVAL_MS);
+        return;
+      }
+
+      // Phase 3 — machine confirmed clean and ready
+      rebootWatcherActive = false;
+      process.stderr.write('\n[REBOOT] engineState=OFF confirmed — sending engine_initialise\n');
+      logger.info({ msg: 'bridge.system.reboot.machine_ready', host: sshHost, engineState });
+
+      setRebootState('initialising');
+
+      try {
+        await adapter.initialiseEngine({});
+        process.stderr.write('[REBOOT] engine_initialise sent OK\n\n');
+        logger.info({ msg: 'bridge.system.reboot.initialise_ok', host: sshHost });
+      } catch (initErr) {
+        process.stderr.write('[REBOOT] engine_initialise failed: ' + initErr.message + '\n\n');
+        logger.error({ msg: 'bridge.system.reboot.initialise_error', err: initErr.message, host: sshHost });
+      }
+
+      // Phase 4 — done, normal polling resumes
+      setRebootState(null);
+    }
   }
   // ────────────────────────────────────────────────────────────────────────────
 
@@ -377,6 +430,7 @@ function createBridgeServer(options = {}) {
   function emitSystemState(snapshot, { initial = false } = {}) {
     const payload = {
       ...snapshot,
+      rebootState,
       initial,
       emittedAt: new Date().toISOString()
     };
@@ -417,7 +471,8 @@ function createBridgeServer(options = {}) {
         queueLength: snapshot.queueLength,
         inkLevels: snapshot.inkLevels,
         connected: snapshot.connected,
-        degraded: snapshot.degraded
+        degraded: snapshot.degraded,
+        rebootState
       });
 
       if (signature !== lastStatusSignature) {
@@ -486,7 +541,7 @@ function createBridgeServer(options = {}) {
 
       latestRawDeviceStatus = latestRawDeviceStatus || { connected: false, degraded: true, details: {} };
       latestSystemState = fallback;
-      const signature = JSON.stringify({ engineState: fallback.engineState, connected: fallback.connected, degraded: fallback.degraded, error: fallback.error, errorCategory: fallback.errorCategory });
+      const signature = JSON.stringify({ engineState: fallback.engineState, connected: fallback.connected, degraded: fallback.degraded, error: fallback.error, errorCategory: fallback.errorCategory, rebootState });
       if (signature !== lastStatusSignature) {
         lastStatusSignature = signature;
         emitSystemState(fallback);
