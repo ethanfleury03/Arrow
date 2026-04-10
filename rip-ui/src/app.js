@@ -5142,6 +5142,10 @@ function startStatusPolling() {
       });
 
       staleTimer = setInterval(() => {
+        // During reboot the bridge may stop emitting SSE while the poll signature is unchanged
+        // (device offline, same error). Fallback HTTP is intentionally skipped — do not treat that as a dead stream.
+        if (state.liveStatus.rebootState) return;
+
         const ageMs = state.liveStatus.lastUpdate ? Date.now() - Date.parse(state.liveStatus.lastUpdate) : Number.POSITIVE_INFINITY;
         if (!Number.isFinite(ageMs) || ageMs > Math.max(5000, Number(state.config.pollIntervalMs || 1000) * 3)) {
           markStatusStreamStale('No update received from SSE stream');
