@@ -77,6 +77,7 @@ const INITIAL_STATE = {
     running: false,
     deviceOffline: false,
     deviceOfflineReason: null,
+    rebootInProgress: false,
     inkLevels: { C: 0, M: 0, Y: 0, K: 0 },
     inkSource: 'none',
     capabilities: {
@@ -4927,7 +4928,10 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
 
   state.liveStatus.engineState = mapped.engineState;
   state.liveStatus.engineStateRawNumeric = mapped.engineStateRawNumeric;
-  state.liveStatus.engineStateRawLabel = mapped.engineStateRawLabel;
+  // Don't overwrite the REBOOTING label while a reboot is in progress
+  if (!state.liveStatus.rebootInProgress) {
+    state.liveStatus.engineStateRawLabel = mapped.engineStateRawLabel;
+  }
   state.liveStatus.engineStateCanonical = mapped.engineStateCanonical;
   state.liveStatus.queueLength = mapped.queueLength;
   state.liveStatus.faults = mapped.faults;
@@ -4948,12 +4952,15 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
   state.liveStatus.deviceOffline = bridgeReportsOffline;
   state.liveStatus.deviceOfflineReason = bridgeReportsOffline ? (status.errorCategory || 'unknown') : null;
   if (bridgeReportsOffline) {
-    state.liveStatus.engineStateRawLabel = 'OFFLINE';
+    // Show REBOOTING while a reboot is in progress, OFFLINE otherwise
+    state.liveStatus.engineStateRawLabel = state.liveStatus.rebootInProgress ? 'REBOOTING' : 'OFFLINE';
     if (!wasOffline) {
-      console.log('[status] Device went OFFLINE (connected:false from bridge, errorCategory:', status.errorCategory, ')');
+      console.log('[status] Device went OFFLINE (rebootInProgress=' + state.liveStatus.rebootInProgress + ', errorCategory:', status.errorCategory, ')');
     }
   } else if (wasOffline) {
     console.log('[status] Device back ONLINE (connected:', status.connected, ')');
+    // Machine is back — clear the reboot lock so live labels flow through again
+    state.liveStatus.rebootInProgress = false;
     // Clear any pending/running reboot banner — bridge has already sent engine_initialise
     if (state.liveStatus.autoInitStatus === 'pending' || state.liveStatus.autoInitStatus === 'running') {
       state.liveStatus.autoInitStatus = 'done';
@@ -5844,12 +5851,14 @@ function bind() {
       const data = await res.json().catch(() => ({}));
       console.log('[reboot] response', res.status, data);
       if (res.ok) {
-        // Immediately show REBOOTING state — bridge will handle reconnect + engine_initialise
+        // Lock UI into REBOOTING state — bridge will handle reconnect + engine_initialise.
+        // rebootInProgress blocks applyLiveStatus from overwriting the label until machine is confirmed back.
+        state.liveStatus.rebootInProgress = true;
         state.liveStatus.deviceOffline = true;
         state.liveStatus.engineStateRawLabel = 'REBOOTING';
         state.liveStatus.autoInitStatus = 'pending';
         render();
-        console.log('[reboot] Command sent — bridge is watching for reconnect and will auto-initialise');
+        console.log('[reboot] Command sent — rebootInProgress=true, bridge watching for reconnect');
         if (txtSpan) txtSpan.textContent = 'Sent \u2713';
         if (iconSpan) iconSpan.textContent = '\u2713';
         setTimeout(() => {
