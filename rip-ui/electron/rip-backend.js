@@ -331,7 +331,10 @@ class BridgeHttpAdapter {
         faults: [],
         inkLevels: status?.inkLevels || null,
         details: status?.details || null,
-        timestamp: status?.lastUpdate || nowIso()
+        timestamp: status?.lastUpdate || nowIso(),
+        connected: typeof status?.connected === 'boolean' ? status.connected : undefined,
+        degraded: typeof status?.degraded === 'boolean' ? status.degraded : undefined,
+        rebootState: status?.rebootState != null ? status.rebootState : null
       };
     } catch (_bridgeError) {
       // Fallback: RIP adapter health endpoint when bridge status API is unavailable.
@@ -573,7 +576,10 @@ function createRipBackend({ mode = process.env.RIP_BACKEND_MODE || 'bridge-http'
         inkLevels: parseInkLevelsFromStatusPayload(status),
         faults: Array.isArray(status?.faults) ? status.faults : [],
         timestamp: status?.timestamp || nowIso(),
-        source: `electron-${adapter.name}`
+        source: `electron-${adapter.name}`,
+        connected: typeof status?.connected === 'boolean' ? status.connected : undefined,
+        degraded: typeof status?.degraded === 'boolean' ? status.degraded : undefined,
+        rebootState: status?.rebootState != null ? status.rebootState : null
       };
     },
 

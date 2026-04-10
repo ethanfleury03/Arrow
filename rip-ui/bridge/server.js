@@ -648,7 +648,9 @@ function createBridgeServer(options = {}) {
             }
           },
           source: 'bridge-http',
-          lastUpdate: snapshot.timestamp || raw.lastUpdate || new Date().toISOString()
+          lastUpdate: snapshot.timestamp || raw.lastUpdate || new Date().toISOString(),
+          // Same reboot phase as SSE — keeps HTTP fallback polls from clobbering the UI label.
+          rebootState: rebootState ?? null
         });
       }
 

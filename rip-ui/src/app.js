@@ -77,6 +77,7 @@ const INITIAL_STATE = {
     running: false,
     deviceOffline: false,
     deviceOfflineReason: null,
+    rebootState: null,
     inkLevels: { C: 0, M: 0, Y: 0, K: 0 },
     inkSource: 'none',
     capabilities: {
@@ -4888,6 +4889,7 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
 
   state.liveStatus.engineState = mapped.engineState;
   state.liveStatus.engineStateRawNumeric = mapped.engineStateRawNumeric;
+  state.liveStatus.rebootState = status.rebootState ? String(status.rebootState) : null;
   // Bridge is source of truth — if it says a reboot is in progress, use that label
   if (status.rebootState) {
     state.liveStatus.engineStateRawLabel = status.rebootState.toUpperCase();
@@ -5051,6 +5053,10 @@ function startStatusPolling() {
 
   const runFallbackPoll = async () => {
     if (fallbackPollInFlight) return;
+    // SSE already carries reboot phase; skip redundant HTTP polls until the bridge clears rebootState.
+    if (state.liveStatus.streamConnected && state.liveStatus.rebootState) {
+      return;
+    }
     fallbackPollInFlight = true;
 
     try {
@@ -5119,7 +5125,7 @@ function startStatusPolling() {
 
           const missingInk = !snapshot?.inkLevels || Object.values(snapshot.inkLevels || {}).every(v => Number(v) === 0);
           const now = Date.now();
-          if (missingInk && now - lastInkHydrateAt > 5000) {
+          if (missingInk && now - lastInkHydrateAt > 5000 && !snapshot.rebootState) {
             lastInkHydrateAt = now;
             runFallbackPoll();
           }
@@ -5807,7 +5813,8 @@ function bind() {
       const data = await res.json().catch(() => ({}));
       console.log('[reboot] response', res.status, data);
       if (res.ok) {
-        // Optimistic label while first SSE with rebootState:'rebooting' arrives (~1s)
+        // Optimistic phase until SSE/HTTP reflects bridge rebootState
+        state.liveStatus.rebootState = 'rebooting';
         state.liveStatus.engineStateRawLabel = 'REBOOTING';
         render();
         console.log('[reboot] Command sent — bridge is now the source of truth via rebootState');
