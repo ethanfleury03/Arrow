@@ -194,6 +194,49 @@ header {
   letter-spacing: 0.2px;
 }
 
+.reboot-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 5px 11px;
+  border: 1px solid var(--brand-red-strong);
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--brand-red) 0%, var(--brand-red-strong) 100%);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease, opacity 120ms ease;
+  letter-spacing: 0.3px;
+}
+
+.reboot-btn:hover {
+  background: linear-gradient(180deg, #d4162c 0%, var(--brand-red-strong) 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(164, 15, 32, 0.35);
+}
+
+.reboot-btn:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.reboot-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.reboot-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.reboot-text {
+  letter-spacing: 0.2px;
+}
+
 .wifi-outline {
   position: relative;
   display: inline-flex;
@@ -279,16 +322,6 @@ h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.2px; }
 h2 { margin: 0 0 var(--space-2); font-size: 16px; font-weight: 700; letter-spacing: 0.2px; }
 h3 { margin: var(--space-2) 0 var(--space-1); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #4a4a4a; }
 
-#modeBadge {
-  font-size: 11px;
-  font-weight: 700;
-  color: #6e0c17;
-  background: linear-gradient(180deg, #fff4f6, #fbdfe4);
-  border: 1px solid #c76370;
-  border-radius: 999px;
-  padding: 6px 11px;
-  box-shadow: 0 0 0 1px rgba(196, 18, 38, 0.14) inset;
-}
 
 .workspace-shell {
   height: calc(100vh - 116px);
@@ -1581,6 +1614,17 @@ th { color: #7c121f; font-weight: 700; }
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.03em;
 }
+
+.system-state-value[data-offline='true'] {
+  color: var(--brand-red);
+  animation: offline-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes offline-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
 
 .ink-values-card {
   padding-bottom: 10px;

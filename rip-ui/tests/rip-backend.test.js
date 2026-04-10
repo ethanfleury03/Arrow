@@ -138,6 +138,39 @@ async function run() {
   });
 
   await withServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/api/device/status') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        engine: 'idle',
+        connected: false,
+        degraded: true,
+        rebootState: 'polling',
+        details: {
+          queueLength: 0,
+          productInfo: {
+            output: '{"raw":"AllStatus(engineStatus=EngineStatus(state=6, isReadyForPrintData=true))"}'
+          }
+        },
+        lastUpdate: new Date().toISOString()
+      }));
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not_found' }));
+  }, async port => {
+    const backend = createRipBackend({
+      mode: 'bridge-http',
+      runtimeConfig: { bridgeHost: '127.0.0.1', bridgePort: port },
+      logger: { warn() {}, error() {} }
+    });
+
+    const st = await backend.getStatus({ host: '127.0.0.1', commandPort: 13002 });
+    assert.equal(st.rebootState, 'polling');
+    assert.equal(st.connected, false);
+    assert.equal(st.degraded, true);
+  });
+
+  await withServer((req, res) => {
     if (req.method === 'POST' && req.url === '/api/device/run-command') {
       res.writeHead(409, { 'content-type': 'application/json' });
       res.end(JSON.stringify({

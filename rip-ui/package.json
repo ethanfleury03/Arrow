@@ -104,6 +104,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
+    "ssh2": "^1.17.0",
     "three": "^0.152.2",
     "thrift": "^0.22.0"
   }

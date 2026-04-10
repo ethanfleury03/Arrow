@@ -75,6 +75,9 @@ const INITIAL_STATE = {
     lastUpdate: null,
     source: 'bridge-http',
     running: false,
+    deviceOffline: false,
+    deviceOfflineReason: null,
+    rebootState: null,
     inkLevels: { C: 0, M: 0, Y: 0, K: 0 },
     inkSource: 'none',
     capabilities: {
@@ -2054,6 +2057,8 @@ function tryAutoDispatchNextJob(source = 'auto-send') {
 }
 
 function resolveGlobalOnlineState() {
+  // Device is explicitly offline (SSH connection refused, rebooting, etc.)
+  if (state.liveStatus?.deviceOffline) return false;
   // Operator rule: if status polling is running, system is considered online.
   if (state.liveStatus?.running) return true;
 
@@ -2226,13 +2231,6 @@ function render() {
   const configEl = document.getElementById('configPreview');
   if (configEl) configEl.textContent = JSON.stringify(state.config, null, 2);
 
-  const modeBadge = document.getElementById('modeBadge');
-  if (modeBadge) {
-    const liveMode = state.liveStatus.source === 'bridge-http';
-    const modeLabel = liveMode ? 'LIVE MODE (HTTP BRIDGE)' : 'LIVE BACKEND DOWN';
-    const lock = isDiscoveryReadOnlyMode() ? ' · DISCOVERY-LOCK' : '';
-    modeBadge.textContent = `${modeLabel}${lock} · ${state.config.operatorProfile} · ${state.config.host}:${state.config.commandPort}`;
-  }
 
   const liveStatusEl = document.getElementById('liveStatusCards');
   if (liveStatusEl) {
@@ -2252,9 +2250,14 @@ function render() {
 
   const systemStateValueEl = document.getElementById('systemStateValue');
   if (systemStateValueEl) {
+    const offline = state.liveStatus.deviceOffline;
     const rawEngineState = String(state.liveStatus?.engineStateRawLabel || '').trim().toUpperCase();
     const canonicalState = String(state.liveStatus?.engineState || '').trim().toUpperCase();
     systemStateValueEl.textContent = rawEngineState || canonicalState || 'UNKNOWN';
+    systemStateValueEl.dataset.offline = offline ? 'true' : 'false';
+    systemStateValueEl.title = offline
+      ? ('Device offline \u2014 ' + (state.liveStatus.deviceOfflineReason || 'connection refused'))
+      : '';
   }
 
   const ink = state.liveStatus?.inkLevels || { C: 0, M: 0, Y: 0, K: 0 };
@@ -2271,14 +2274,6 @@ function render() {
     }
   });
 
-  const simBadge = document.getElementById('simulationBadge');
-  if (simBadge) {
-    const bridgeOnline = state.liveStatus.source === 'bridge-http' && !String(state.liveStatus.engineState || '').startsWith('DOWN');
-    const base = bridgeOnline ? 'LIVE BACKEND (HTTP BRIDGE)' : 'LIVE BACKEND DOWN';
-    const bridgeState = getBridgeHealth().label;
-    const lock = isDiscoveryReadOnlyMode() ? ' · DISCOVERY LOCK' : '';
-    simBadge.textContent = `${base} · ${bridgeState}${lock}`;
-  }
 
   const discoveryToggle = document.getElementById('btnToggleDiscoveryMode');
   if (discoveryToggle) {
@@ -4894,7 +4889,13 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
 
   state.liveStatus.engineState = mapped.engineState;
   state.liveStatus.engineStateRawNumeric = mapped.engineStateRawNumeric;
-  state.liveStatus.engineStateRawLabel = mapped.engineStateRawLabel;
+  state.liveStatus.rebootState = status.rebootState ? String(status.rebootState) : null;
+  // Bridge is source of truth — if it says a reboot is in progress, use that label
+  if (status.rebootState) {
+    state.liveStatus.engineStateRawLabel = status.rebootState.toUpperCase();
+  } else {
+    state.liveStatus.engineStateRawLabel = mapped.engineStateRawLabel;
+  }
   state.liveStatus.engineStateCanonical = mapped.engineStateCanonical;
   state.liveStatus.queueLength = mapped.queueLength;
   state.liveStatus.faults = mapped.faults;
@@ -4908,6 +4909,22 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
   state.liveStatus.lastUpdate = mapped.timestamp;
   state.liveStatus.source = mapped.source;
   state.liveStatus.streamConnected = true;
+
+  // Bridge explicitly reports connected:false when SSH/device is unreachable
+  const wasOffline = state.liveStatus.deviceOffline;
+  const bridgeReportsOffline = status.connected === false;
+  state.liveStatus.deviceOffline = bridgeReportsOffline;
+  state.liveStatus.deviceOfflineReason = bridgeReportsOffline ? (status.errorCategory || 'unknown') : null;
+  if (bridgeReportsOffline && !status.rebootState) {
+    // Only override label to OFFLINE when the bridge isn't managing a reboot
+    // (during reboot the rebootState label is already applied above)
+    state.liveStatus.engineStateRawLabel = 'OFFLINE';
+    if (!wasOffline) {
+      console.log('[status] Device went OFFLINE (errorCategory:', status.errorCategory, ')');
+    }
+  } else if (wasOffline && !bridgeReportsOffline) {
+    console.log('[status] Device back ONLINE (connected:', status.connected, ')');
+  }
 
   // Evidence-based job completion detection
   // Only mark jobs as completed when engine returns to idle/ready AFTER being in a printing state
@@ -5036,6 +5053,10 @@ function startStatusPolling() {
 
   const runFallbackPoll = async () => {
     if (fallbackPollInFlight) return;
+    // SSE already carries reboot phase; skip redundant HTTP polls until the bridge clears rebootState.
+    if (state.liveStatus.streamConnected && state.liveStatus.rebootState) {
+      return;
+    }
     fallbackPollInFlight = true;
 
     try {
@@ -5084,17 +5105,27 @@ function startStatusPolling() {
         }
 
         if (type === 'update') {
-          if (pollTimer) {
-            clearInterval(pollTimer);
-            pollTimer = null;
-            log('Fallback polling stopped after SSE update.');
-          }
           const snapshot = payload || {};
+          const deviceIsOffline = snapshot.connected === false;
+
+          // Only stop fallback polling when device is confirmed online.
+          // When offline, keep polling so we catch the moment it comes back.
+          if (!deviceIsOffline) {
+            if (pollTimer) {
+              clearInterval(pollTimer);
+              pollTimer = null;
+              log('Fallback polling stopped after SSE update (device online).');
+            }
+          } else {
+            log('[offline] Device reported offline via SSE — keeping/starting fallback poll to detect reconnect.');
+            ensureFallbackPolling('device offline');
+          }
+
           applyLiveStatus(snapshot, { channel: 'status-sse' });
 
           const missingInk = !snapshot?.inkLevels || Object.values(snapshot.inkLevels || {}).every(v => Number(v) === 0);
           const now = Date.now();
-          if (missingInk && now - lastInkHydrateAt > 5000) {
+          if (missingInk && now - lastInkHydrateAt > 5000 && !snapshot.rebootState) {
             lastInkHydrateAt = now;
             runFallbackPoll();
           }
@@ -5111,6 +5142,10 @@ function startStatusPolling() {
       });
 
       staleTimer = setInterval(() => {
+        // During reboot the bridge may stop emitting SSE while the poll signature is unchanged
+        // (device offline, same error). Fallback HTTP is intentionally skipped — do not treat that as a dead stream.
+        if (state.liveStatus.rebootState) return;
+
         const ageMs = state.liveStatus.lastUpdate ? Date.now() - Date.parse(state.liveStatus.lastUpdate) : Number.POSITIVE_INFINITY;
         if (!Number.isFinite(ageMs) || ageMs > Math.max(5000, Number(state.config.pollIntervalMs || 1000) * 3)) {
           markStatusStreamStale('No update received from SSE stream');
@@ -5763,6 +5798,54 @@ function bind() {
   bindClick('btnAlignBottom', () => setAlign('y', 'bottom'));
   bindClick('btnAutoSendToggle', toggleAutoSend);
   bindClick('btnFinishPrinting', () => executeCommand('print_finish'));
+  bindClick('btnReboot', async () => {
+    const btn = document.getElementById('btnReboot');
+    if (!btn || btn.disabled) return;
+    if (!window.confirm(
+      'Shut down the engine (printhead status will show live SHUTTING_DOWN/OFF), wait for OFF, then reboot the host?\n\n'
+      + 'This can take a few minutes — do not close the app.'
+    )) return;
+
+    const txtSpan = btn.querySelector('.reboot-text');
+    const iconSpan = btn.querySelector('.reboot-icon');
+    btn.disabled = true;
+    if (txtSpan) txtSpan.textContent = 'Shut down / reboot\u2026';
+
+    const bridgeBase = String((state && state.config && state.config.bridgeBaseUrl) || 'http://127.0.0.1:8787').replace(/\/$/, '');
+    const url = bridgeBase + '/api/system/reboot';
+    console.log('[reboot] POST', url);
+
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      const data = await res.json().catch(() => ({}));
+      console.log('[reboot] response', res.status, data);
+      if (res.ok) {
+        // During engine_shutdown+wait OFF, rebootState is null — live printhead status drives the label.
+        render();
+        console.log('[reboot] Host reboot handed off — bridge rebootState + SSE for recovery phases');
+        if (txtSpan) txtSpan.textContent = 'Sent \u2713';
+        if (iconSpan) iconSpan.textContent = '\u2713';
+        setTimeout(() => {
+          if (txtSpan) txtSpan.textContent = 'Reboot';
+          if (iconSpan) iconSpan.textContent = '\u21BA';
+          btn.disabled = false;
+        }, 4000);
+      } else {
+        const msg = (data && (data.message || data.error)) || ('HTTP ' + res.status);
+        console.error('[reboot] FAILED:', msg);
+        window.alert('Reboot failed: ' + msg);
+        if (txtSpan) txtSpan.textContent = 'Reboot';
+        if (iconSpan) iconSpan.textContent = '\u21BA';
+        btn.disabled = false;
+      }
+    } catch (err) {
+      console.error('[reboot] fetch error:', err);
+      window.alert('Reboot error: ' + err.message);
+      if (txtSpan) txtSpan.textContent = 'Reboot';
+      if (iconSpan) iconSpan.textContent = '\u21BA';
+      btn.disabled = false;
+    }
+  });
   bindClick('btnToggleDiscoveryMode', toggleDiscoveryMode);
   bindClick('btnFlipHorizontal', () => toggleFlip('x'));
   bindClick('btnFlipVertical', () => toggleFlip('y'));
