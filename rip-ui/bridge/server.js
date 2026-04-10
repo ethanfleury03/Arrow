@@ -1,6 +1,9 @@
 const http = require('node:http');
 const { URL } = require('node:url');
 const fs = require('node:fs');
+const { promisify } = require('node:util');
+const { execFile } = require('node:child_process');
+const execFileAsync = promisify(execFile);
 const { loadBridgeConfig } = require('./config');
 const { createLogger } = require('./logger');
 const { createMemjetAdapter, AdapterCapabilityError } = require('./memjet-adapter');
@@ -14,7 +17,7 @@ const {
   hasSimulatedSignal,
   resolveEngineState
 } = require('./engine-state');
-const { buildSshSettings, runSshSelfCheck } = require('./real-client-factory.local');
+const { buildSshSettings, buildSshArgs, runSshSelfCheck } = require('./real-client-factory.local');
 const { loadPesDefaults } = require('./pes-defaults');
 
 function json(res, statusCode, body) {
@@ -266,6 +269,82 @@ function createBridgeServer(options = {}) {
     source: 'bridge-http',
     timestamp: new Date().toISOString()
   };
+
+  // ── Reboot recovery watcher ─────────────────────────────────────────────────
+  // After sudo reboot is sent, the bridge polls SSH until the machine responds,
+  // then fires engine_initialise automatically.
+  let rebootWatcherActive = false;
+
+  function startRebootWatcher({ sshBin, sshHost, sshUser, sshKeyPath, sshPort }) {
+    if (rebootWatcherActive) {
+      logger.warn({ msg: 'bridge.system.reboot.watcher_already_active', host: sshHost });
+      return;
+    }
+    rebootWatcherActive = true;
+
+    const MAX_ATTEMPTS = 60; // 3 minutes at ~3s per attempt
+    let attempts = 0;
+
+    process.stderr.write('\n[REBOOT] Watching for ' + sshHost + ' to come back (SSH ping every 3s, max 3min)...\n');
+    logger.info({ msg: 'bridge.system.reboot.watch_start', host: sshHost });
+
+    const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+
+    async function tryPing() {
+      if (!rebootWatcherActive) return;
+      if (attempts >= MAX_ATTEMPTS) {
+        rebootWatcherActive = false;
+        process.stderr.write('\n[REBOOT] Watch timed out — ' + sshHost + ' did not come back within 3 minutes\n\n');
+        logger.error({ msg: 'bridge.system.reboot.watch_timeout', host: sshHost, attempts });
+        return;
+      }
+      attempts++;
+
+      const pingArgs = [
+        '-F', nullDevice,
+        '-o', 'BatchMode=yes',
+        '-o', 'StrictHostKeyChecking=accept-new',
+        '-o', 'IdentitiesOnly=yes',
+        '-o', 'PreferredAuthentications=publickey',
+        '-o', 'ConnectTimeout=5',
+        '-p', String(sshPort || 22),
+        ...(sshKeyPath ? ['-i', sshKeyPath] : []),
+        sshUser + '@' + sshHost,
+        'echo rip_ping_ok'
+      ];
+
+      try {
+        await execFileAsync(sshBin, pingArgs, { timeout: 8000, maxBuffer: 4096 });
+
+        // SSH succeeded — machine is back
+        rebootWatcherActive = false;
+        process.stderr.write('\n[REBOOT] ' + sshHost + ' is back online (attempt ' + attempts + ')\n');
+        logger.info({ msg: 'bridge.system.reboot.machine_back', host: sshHost, attempts });
+
+        // Brief pause to let the PES service finish starting up
+        await new Promise(r => setTimeout(r, 3000));
+
+        process.stderr.write('[REBOOT] Sending engine_initialise...\n');
+        logger.info({ msg: 'bridge.system.reboot.initialise_start', host: sshHost });
+
+        try {
+          await adapter.initialiseEngine({});
+          process.stderr.write('[REBOOT] engine_initialise sent OK\n\n');
+          logger.info({ msg: 'bridge.system.reboot.initialise_ok', host: sshHost });
+        } catch (initErr) {
+          process.stderr.write('[REBOOT] engine_initialise failed: ' + initErr.message + '\n\n');
+          logger.error({ msg: 'bridge.system.reboot.initialise_error', err: initErr.message, host: sshHost });
+        }
+      } catch {
+        // Still offline — try again after 3s
+        setTimeout(tryPing, 3000);
+      }
+    }
+
+    // Wait 5s before first attempt (give machine time to start shutting down)
+    setTimeout(tryPing, 5000);
+  }
+  // ────────────────────────────────────────────────────────────────────────────
 
   function toSystemStateSnapshot(status = {}) {
     const details = status?.details || {};
@@ -775,6 +854,16 @@ function createBridgeServer(options = {}) {
 
           process.stderr.write('[REBOOT] Command sent successfully — ' + rebootHost + ' is rebooting.\n\n');
           logger.info({ msg: 'bridge.system.reboot.ok', host: rebootHost });
+
+          // Start SSH reconnect watcher — will fire engine_initialise once machine is back
+          startRebootWatcher({
+            sshBin: rebootSshSettings.sshBin || 'ssh',
+            sshHost: rebootHost,
+            sshUser: rebootUser,
+            sshKeyPath: rebootKeyPath,
+            sshPort: rebootPort
+          });
+
           return json(res, 200, { ok: true, message: 'Reboot command sent to ' + rebootHost });
         } catch (err) {
           process.stderr.write('[REBOOT] FAILED: ' + err.message + '\n\n');

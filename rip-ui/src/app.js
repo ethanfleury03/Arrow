@@ -153,8 +153,7 @@ const INITIAL_STATE = {
       copyVerticalSpacingMm: 0,
       copyIntervalIncludesSize: false
     }
-  },
-  rebootPending: false
+  }
 };
 
 let state = loadState();
@@ -2271,15 +2270,15 @@ function render() {
   if (autoInitBanner) {
     const s = state.liveStatus.autoInitStatus;
     if (s === 'pending') {
-      autoInitBanner.textContent = '\u231B Auto-initialising in 5s\u2026';
+      autoInitBanner.textContent = '\u231B Rebooting\u2026 waiting for machine to come back';
       autoInitBanner.dataset.status = 'pending';
       autoInitBanner.hidden = false;
     } else if (s === 'running') {
-      autoInitBanner.textContent = '\u21BB Sending engine_initialise\u2026';
+      autoInitBanner.textContent = '\u21BB Machine back \u2014 sending engine_initialise\u2026';
       autoInitBanner.dataset.status = 'running';
       autoInitBanner.hidden = false;
     } else if (s === 'done') {
-      autoInitBanner.textContent = '\u2713 Auto-initialise sent successfully';
+      autoInitBanner.textContent = '\u2713 Machine back online \u2014 engine_initialise sent';
       autoInitBanner.dataset.status = 'done';
       autoInitBanner.hidden = false;
     } else if (s === 'failed') {
@@ -4955,14 +4954,11 @@ function applyLiveStatus(status = {}, { channel = 'status-update' } = {}) {
     }
   } else if (wasOffline) {
     console.log('[status] Device back ONLINE (connected:', status.connected, ')');
-  }
-
-  // Device came back online after a reboot — auto-initialise
-  if (wasOffline && !bridgeReportsOffline && state.rebootPending) {
-    console.log('[auto-init] Reboot complete — device back online, scheduling initialise');
-    state.rebootPending = false;
-    persistState();
-    scheduleAutoInitialise();
+    // Clear any pending/running reboot banner — bridge has already sent engine_initialise
+    if (state.liveStatus.autoInitStatus === 'pending' || state.liveStatus.autoInitStatus === 'running') {
+      state.liveStatus.autoInitStatus = 'done';
+      setTimeout(() => { state.liveStatus.autoInitStatus = null; render(); }, 5000);
+    }
   }
 
   // Evidence-based job completion detection
@@ -5319,41 +5315,6 @@ function renderEligibility() {
   });
 
   el.textContent = rows.join('\n\n');
-}
-
-let _autoInitTimer = null;
-function scheduleAutoInitialise() {
-  if (_autoInitTimer) clearTimeout(_autoInitTimer);
-  log('[auto-init] Device back online after reboot — scheduling engine_initialise in 5s');
-  state.liveStatus.autoInitStatus = 'pending';
-  render();
-  _autoInitTimer = setTimeout(async () => {
-    _autoInitTimer = null;
-    log('[auto-init] Firing engine_initialise');
-    state.liveStatus.autoInitStatus = 'running';
-    render();
-    try {
-      const bridgeBase = String((state && state.config && state.config.bridgeBaseUrl) || 'http://127.0.0.1:8787').replace(/\/$/, '');
-      const res = await fetch(bridgeBase + '/api/device/run-command', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: 'engine_initialise' })
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.accepted !== false) {
-        log('[auto-init] engine_initialise accepted: ' + JSON.stringify(data));
-        state.liveStatus.autoInitStatus = 'done';
-      } else {
-        log('[auto-init] engine_initialise rejected: ' + JSON.stringify(data));
-        state.liveStatus.autoInitStatus = 'failed';
-      }
-    } catch (err) {
-      log('[auto-init] engine_initialise fetch error: ' + err.message);
-      state.liveStatus.autoInitStatus = 'failed';
-    }
-    render();
-    setTimeout(() => { state.liveStatus.autoInitStatus = null; render(); }, 8000);
-  }, 5000);
 }
 
 async function executeCommand(command) {
@@ -5883,9 +5844,12 @@ function bind() {
       const data = await res.json().catch(() => ({}));
       console.log('[reboot] response', res.status, data);
       if (res.ok) {
-        state.rebootPending = true;
-        persistState();
-        console.log('[reboot] rebootPending=true, watching for offline→online transition for auto-init');
+        // Immediately show REBOOTING state — bridge will handle reconnect + engine_initialise
+        state.liveStatus.deviceOffline = true;
+        state.liveStatus.engineStateRawLabel = 'REBOOTING';
+        state.liveStatus.autoInitStatus = 'pending';
+        render();
+        console.log('[reboot] Command sent — bridge is watching for reconnect and will auto-initialise');
         if (txtSpan) txtSpan.textContent = 'Sent \u2713';
         if (iconSpan) iconSpan.textContent = '\u2713';
         setTimeout(() => {
