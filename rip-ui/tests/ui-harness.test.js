@@ -113,6 +113,12 @@ function createHarness() {
       },
       createElement(tag) {
         return new Element(tag);
+      },
+      querySelector(selector) {
+        return new Element(selector);
+      },
+      querySelectorAll(selector) {
+        return [];
       }
     },
     localStorage: {

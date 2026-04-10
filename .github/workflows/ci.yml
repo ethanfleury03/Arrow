@@ -53,8 +53,8 @@ jobs:
       - run: npm run test:board
 
   # ── rip-ui: report generation ───────────────────────────────────────────────
-  # release:manifest is excluded here because it checks for built .exe artifacts
-  # that only exist after a real Windows build — run that job separately.
+  # release:manifest, handoff:bundle and test:handoff are excluded here — they all
+  # require dist/RELEASE_MANIFEST.json which only exists after a real Windows build.
   rip-ui-reports:
     name: rip-ui — report generation
     runs-on: ubuntu-latest
@@ -73,8 +73,6 @@ jobs:
           npm run preflight &&
           npm run report:scenarios &&
           npm run report:control &&
-          npm run handoff:bundle &&
-          npm run test:handoff &&
           npm run report:submitter &&
           npm run report:hookup &&
           npm run test:ops &&

@@ -4,18 +4,17 @@ import json
 import os
 import shlex
 import subprocess
-import tempfile
 import threading
 import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from board_compositor import BoardCompositor, PDFPlacement, composite_board_job
+from board_compositor import composite_board_job
 
 
 MAX_LOG_TAIL = 200
