@@ -1,0 +1,17 @@
+{
+  "name": "RIP Network Configuration",
+  "version": "1.0",
+  "description": "User-configurable network settings for RIP-UI bridge",
+  "settings": {
+    "connectionMode": "local-network",
+    "printerIp": "192.168.1.115",
+    "printerPort": 22,
+    "sshUsername": "root",
+    "sshKeyPath": "~/.ssh/id_ed25519",
+    "gatewayPort": 8080,
+    "pesPort": 9090,
+    "autoConnect": false,
+    "connectionTimeout": 10000
+  },
+  "_comment": "Edit this file to change printer connection settings. Set connectionMode to 'http-gateway' to send jobs over WiFi. Restart the bridge after changes."
+}

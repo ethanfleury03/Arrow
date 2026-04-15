@@ -1,6 +1,7 @@
 const http = require('node:http');
 const { URL } = require('node:url');
 const fs = require('node:fs');
+const os = require('node:os');
 const { promisify } = require('node:util');
 const { execFile } = require('node:child_process');
 const execFileAsync = promisify(execFile);
@@ -143,15 +144,34 @@ async function performStartupSelfCheck({ config, logger, skipIfLocal = false }) 
   }
 
   // Check if SSH is configured — fall back to pes-defaults.js hardcoded values
+  // But now prefer network config from bridge-data/network.json
+  const networkConfig = config?.network || {};
   const ARROW_PES = loadPesDefaults();
-  const sshHost = String(process.env.MEMJET_SSH_HOST || process.env.RIP_SSH_HOST || ARROW_PES.sshHost || '').trim();
-  const sshUser = String(process.env.MEMJET_SSH_USER || process.env.RIP_SSH_USER || ARROW_PES.sshUser || '').trim();
+  
+  const sshHost = String(
+    networkConfig.printerIp ||
+    process.env.MEMJET_SSH_HOST || 
+    process.env.RIP_SSH_HOST || 
+    ARROW_PES.sshHost || 
+    ''
+  ).trim();
+  
+  const sshUser = String(
+    networkConfig.sshUsername ||
+    process.env.MEMJET_SSH_USER || 
+    process.env.RIP_SSH_USER || 
+    ARROW_PES.sshUser || 
+    ''
+  ).trim();
+  
+  const sshKeyPath = networkConfig.sshKeyPath || path.join(os.homedir(), '.ssh', 'id_ed25519');
+  const sshPort = networkConfig.printerPort || 22;
   const cmdTemplate = String(process.env.MEMJET_SSH_REMOTE_CMD_TEMPLATE || ARROW_PES.sshRemoteCmdTemplate || '').trim();
 
   if (!sshHost || !sshUser || !cmdTemplate) {
     const missing = [
-      !sshHost ? 'MEMJET_SSH_HOST' : null,
-      !sshUser ? 'MEMJET_SSH_USER' : null,
+      !sshHost ? 'printerIp (in network.json) or MEMJET_SSH_HOST' : null,
+      !sshUser ? 'sshUsername (in network.json) or MEMJET_SSH_USER' : null,
       !cmdTemplate ? 'MEMJET_SSH_REMOTE_CMD_TEMPLATE' : null
     ].filter(Boolean);
     const reason = `SSH not fully configured (missing: ${missing.join(', ')}) - skipping self-check`;
@@ -165,7 +185,8 @@ async function performStartupSelfCheck({ config, logger, skipIfLocal = false }) 
     host: config?.memjet?.host,
     commandPort: config?.memjet?.commandPort,
     eventPort: config?.memjet?.eventPort,
-    dataPort: config?.memjet?.dataPort
+    dataPort: config?.memjet?.dataPort,
+    networkConfig
   });
 
   const result = await runSshSelfCheck(settings, logger);
@@ -854,11 +875,13 @@ function createBridgeServer(options = {}) {
 
       if (req.method === 'POST' && url.pathname === '/api/system/reboot') {
         // Resolve the same SSH settings the bridge already uses (root + private key)
+        const networkConfig = config?.network || {};
         const rebootSshSettings = buildSshSettings({
           host: config?.memjet?.host,
           commandPort: config?.memjet?.commandPort,
           eventPort: config?.memjet?.eventPort,
-          dataPort: config?.memjet?.dataPort
+          dataPort: config?.memjet?.dataPort,
+          networkConfig
         });
         const rebootHost = rebootSshSettings.sshHost || '192.168.100.200';
         const rebootUser = rebootSshSettings.sshUser || 'root';

@@ -27,6 +27,8 @@
  */
 
 const fs = require('node:fs');
+const http = require('node:http');
+const { URL } = require('node:url');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { promisify } = require('node:util');
@@ -128,8 +130,101 @@ function buildGborcatCommand({ host, dataPort, jobId, artifactPath }) {
 }
 
 function getSubmitMode() {
-  // Default to memjet-rip so auto-send works out-of-the-box in Arrow monorepo.
+  // Modes: memjet-rip | gborcat | http-gateway
+  // http-gateway: Send jobs to HTTP gateway on printer PC over WiFi/LAN
   return String(process.env.MEMJET_SUBMIT_MODE || 'memjet-rip').trim().toLowerCase();
+}
+
+/**
+ * Submit job to HTTP gateway on printer PC
+ * Used for WiFi/LAN printing from laptop to remote printer
+ */
+async function submitToHttpGateway({ artifactPath, gatewayUrl, jobId, copies = 1, logger }) {
+  const gateway = gatewayUrl || process.env.RIP_GATEWAY_URL || 'http://192.168.1.115:8080';
+  const url = `${gateway}/api/jobs`;
+  
+  if (logger?.info) {
+    logger.info({
+      msg: 'memjet.submitJobData.httpGateway',
+      gateway,
+      jobId,
+      copies,
+      artifactPath
+    });
+  }
+
+  // Read file into buffer
+  const fileBuffer = fs.readFileSync(artifactPath);
+  
+  return new Promise((resolve, reject) => {
+    const boundary = `----FormBoundary${crypto.randomBytes(16).toString('hex')}`;
+    const fileName = path.basename(artifactPath);
+    
+    // Build multipart form data
+    const pre = Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${fileName}"\r\n` +
+      `Content-Type: application/pdf\r\n\r\n`
+    );
+    
+    const mid = Buffer.from(
+      `\r\n--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="copies"\r\n\r\n${copies}\r\n` +
+      `--${boundary}--\r\n`
+    );
+    
+    const postData = Buffer.concat([pre, fileBuffer, mid]);
+    
+    const parsed = new URL(url);
+    const options = {
+      hostname: parsed.hostname,
+      port: parsed.port || 80,
+      path: parsed.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': postData.length,
+        'X-Job-Id': jobId
+      },
+      timeout: 300000 // 5 minute timeout for large files
+    };
+
+    const req = http.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const result = JSON.parse(data);
+          if (res.statusCode >= 200 && res.statusCode < 300 && result.ok) {
+            resolve({
+              ok: true,
+              method: 'http-gateway',
+              gateway,
+              jobId,
+              copies,
+              gatewayResponse: result
+            });
+          } else {
+            reject(new Error(`HTTP gateway error: ${result.error || data}`));
+          }
+        } catch (e) {
+          reject(new Error(`Invalid gateway response: ${data}`));
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      reject(new Error(`HTTP gateway connection failed: ${err.message}`));
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('HTTP gateway timeout'));
+    });
+
+    req.write(postData);
+    req.end();
+  });
 }
 
 function buildMemjetRipCommand({ artifactPath, host, dataPort, copies = 1 }) {
@@ -339,23 +434,55 @@ function buildSshArgs(settings) {
   return args;
 }
 
-function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
+function buildSshSettings({ host, commandPort, eventPort, dataPort, networkConfig = {} } = {}) {
   const env = process.env;
   const backend = String(env.MEMJET_REAL_BACKEND || 'ssh').trim().toLowerCase();
 
-  const sshHost = String(env.MEMJET_SSH_HOST || env.RIP_SSH_HOST || ARROW_PES.sshHost).trim();
-  const sshUser = String(env.MEMJET_SSH_USER || env.RIP_SSH_USER || ARROW_PES.sshUser).trim();
+  // Use network config if provided (from network.json), otherwise fall back to env vars
+  // Priority: 1) network.json settings, 2) env vars, 3) ARROW_PES defaults
+  const sshHost = String(
+    networkConfig.printerIp || 
+    env.MEMJET_SSH_HOST || 
+    env.RIP_SSH_HOST || 
+    ARROW_PES.sshHost
+  ).trim();
+  
+  const sshUser = String(
+    networkConfig.sshUsername || 
+    env.MEMJET_SSH_USER || 
+    env.RIP_SSH_USER || 
+    ARROW_PES.sshUser
+  ).trim();
+  
   const sshPassword = String(env.MEMJET_SSH_PASSWORD || env.RIP_SSH_PASSWORD || '').trim();
 
-  // Default SSH key path — hardcoded to the Arrow rig Windows account for determinism.
-  // Override with MEMJET_SSH_KEY_PATH if your key is in a different location.
+  // Default SSH key path — use network config or hardcoded default
   const defaultUserKey = process.platform === 'win32'
     ? 'C:\\Users\\Arrow\\.ssh\\id_ed25519'
     : path.join(env.HOME || '', '.ssh', 'id_ed25519');
-  const sshKeyPath = String(env.MEMJET_SSH_KEY_PATH || env.RIP_SSH_KEY_PATH || defaultUserKey).trim();
-  const sshPort = Number(env.MEMJET_SSH_PORT || env.RIP_SSH_PORT || ARROW_PES.sshPort || 22);
+    
+  const sshKeyPath = String(
+    networkConfig.sshKeyPath || 
+    env.MEMJET_SSH_KEY_PATH || 
+    env.RIP_SSH_KEY_PATH || 
+    defaultUserKey
+  ).trim();
+  
+  const sshPort = Number(
+    networkConfig.printerPort || 
+    env.MEMJET_SSH_PORT || 
+    env.RIP_SSH_PORT || 
+    ARROW_PES.sshPort || 
+    22
+  );
+  
   const sshBin = String(env.MEMJET_SSH_BIN || 'ssh').trim();
-  const sshTimeoutMs = Number(env.MEMJET_SSH_TIMEOUT_MS || 30000);
+  const sshTimeoutMs = Number(
+    networkConfig.connectionTimeout || 
+    env.MEMJET_SSH_TIMEOUT_MS || 
+    30000
+  );
+  
   const cmdTemplate = String(
     env.MEMJET_SSH_REMOTE_CMD_TEMPLATE || ARROW_PES.sshRemoteCmdTemplate || ''
   ).trim();
@@ -381,10 +508,10 @@ function buildSshSettings({ host, commandPort, eventPort, dataPort }) {
     cmdTemplate,
     missing,
     defaultParams: {
-      host: String(ARROW_PES.host),
-      commandPort: String(ARROW_PES.commandPort),
-      eventPort: String(ARROW_PES.eventPort),
-      dataPort: String(ARROW_PES.dataPort)
+      host: String(networkConfig.printerIp || ARROW_PES.host),
+      commandPort: String(networkConfig.pesPort || ARROW_PES.commandPort),
+      eventPort: String(networkConfig.pesPort ? networkConfig.pesPort + 1 : ARROW_PES.eventPort),
+      dataPort: String(networkConfig.pesPort ? networkConfig.pesPort + 2 : ARROW_PES.dataPort)
     }
   };
 }
@@ -828,8 +955,9 @@ async function createLocalClient({ host, commandPort, dataPort, protocol, transp
   };
 }
 
-async function createSshClient({ host, commandPort, eventPort, dataPort, protocol, transport, logger }) {
-  const settings = buildSshSettings({ host, commandPort, eventPort, dataPort });
+async function createSshClient({ host, commandPort, eventPort, dataPort, protocol, transport, logger, config }) {
+  const networkConfig = config?.network || {};
+  const settings = buildSshSettings({ host, commandPort, eventPort, dataPort, networkConfig });
   if (settings.missing.length > 0) {
     throw new Error(
       `MEMJET_REAL_BACKEND=ssh requires env vars: ${settings.missing.join(', ')}. Failing closed.`
@@ -975,6 +1103,23 @@ async function createSshClient({ host, commandPort, eventPort, dataPort, protoco
 
         const normalized = normalizeJobId(jobId);
         const submitMode = getSubmitMode();
+        
+        // HTTP Gateway mode - send to remote printer over WiFi/LAN
+        if (submitMode === 'http-gateway') {
+          // Build gateway URL from network config
+          const gatewayHost = networkConfig.printerIp || settings.sshHost || '192.168.1.115';
+          const gatewayPort = networkConfig.gatewayPort || 8080;
+          const gatewayUrl = process.env.RIP_GATEWAY_URL || `http://${gatewayHost}:${gatewayPort}`;
+          
+          return submitToHttpGateway({
+            artifactPath: resolvedArtifact,
+            gatewayUrl,
+            jobId: normalized.jobId,
+            copies,
+            logger
+          });
+        }
+        
         if (submitMode === 'memjet-rip') {
           return runMemjetRipSubmit({
             artifactPath: resolvedArtifact,
@@ -1252,13 +1397,14 @@ function selectBackendCandidates(env = process.env) {
 
 async function createClient(params) {
   const { requestedBackend, candidates } = selectBackendCandidates(process.env);
+  const config = params?.config || {}; // Pass through config for network settings
 
   const attempts = [];
   for (const candidate of candidates) {
     try {
       const client = candidate === 'local'
         ? await createLocalClient(params)
-        : (candidate === 'ssh' ? await createSshClient(params) : null);
+        : (candidate === 'ssh' ? await createSshClient({ ...params, config }) : null);
 
       if (!client) {
         throw new Error(`Unsupported MEMJET_REAL_BACKEND=${candidate}. Allowed: auto, local, ssh`);

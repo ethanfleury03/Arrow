@@ -1,4 +1,6 @@
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 const { loadPesDefaults } = require('./pes-defaults');
 
 function num(value, fallback) {
@@ -18,20 +20,59 @@ function resolveArrowRoot(env = process.env) {
   return path.resolve(__dirname, '..');
 }
 
+/**
+ * Load user network configuration from bridge-data/network.json
+ * This allows users to configure printer connection without modifying package.json
+ */
+function loadNetworkConfig(arrowRoot) {
+  const configPath = path.join(arrowRoot, 'bridge-data', 'network.json');
+  
+  try {
+    const content = fs.readFileSync(configPath, 'utf8');
+    const config = JSON.parse(content);
+    
+    // Expand ~ in sshKeyPath to home directory
+    if (config.settings?.sshKeyPath?.startsWith('~')) {
+      config.settings.sshKeyPath = config.settings.sshKeyPath.replace('~', os.homedir());
+    }
+    
+    return config.settings || {};
+  } catch (err) {
+    // File doesn't exist or is invalid - return empty config
+    return {};
+  }
+}
+
 function loadBridgeConfig(env = process.env) {
   const port = num(env.RIP_BRIDGE_PORT, 8787);
   const arrowRoot = resolveArrowRoot(env);
+  
+  // Load user network config (from network.json)
+  const networkConfig = loadNetworkConfig(arrowRoot);
 
   const pes = loadPesDefaults(env);
-  const targetHost = pes.host;
-  const targetCommandPort = pes.commandPort;
-  const targetEventPort = pes.eventPort;
-  const targetDataPort = pes.dataPort;
+  
+  // Override with user network config if provided, otherwise use PES defaults or env vars
+  const targetHost = networkConfig.printerIp || pes.host;
+  const targetCommandPort = networkConfig.pesPort || pes.commandPort;
+  const targetEventPort = networkConfig.pesPort ? networkConfig.pesPort + 1 : pes.eventPort;
+  const targetDataPort = networkConfig.pesPort ? networkConfig.pesPort + 2 : pes.dataPort;
 
   return {
     port,
     host: env.RIP_BRIDGE_HOST || '127.0.0.1',
     logLevel: env.RIP_BRIDGE_LOG_LEVEL || 'info',
+    network: {
+      connectionMode: networkConfig.connectionMode || 'local-network',
+      printerIp: targetHost,
+      printerPort: networkConfig.printerPort || 22,
+      sshUsername: networkConfig.sshUsername || 'root',
+      sshKeyPath: networkConfig.sshKeyPath || path.join(os.homedir(), '.ssh', 'id_ed25519'),
+      gatewayPort: networkConfig.gatewayPort || 8080,
+      pesPort: networkConfig.pesPort || 9090,
+      autoConnect: bool(networkConfig.autoConnect, false),
+      connectionTimeout: num(networkConfig.connectionTimeout, 10000)
+    },
     memjet: {
       mode: env.MEMJET_MODE || 'real',
       host: targetHost,
@@ -55,4 +96,4 @@ function loadBridgeConfig(env = process.env) {
   };
 }
 
-module.exports = { loadBridgeConfig, resolveArrowRoot };
+module.exports = { loadBridgeConfig, resolveArrowRoot, loadNetworkConfig };
